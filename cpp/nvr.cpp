@@ -153,7 +153,7 @@ class Directory {
         char path[512];
         time_t ctime;
     };
-    Directory(const char *const path) {
+    Directory(const char *const path, uint fullPercent, uint cleanPercent) {
         std::strncpy(_path, path, _pathMaxLen);
         if (mkdir(path, 0700) == -1) {
             switch (errno) {
@@ -164,6 +164,8 @@ class Directory {
                     throw std::runtime_error("Failed to create directory");
             }
         }
+        _fullPercent = fullPercent;
+        _cleanPercent = cleanPercent;
     }
     void watch() {
         __pid_t pid = fork();
@@ -178,8 +180,8 @@ class Directory {
                 return;
         }
         update();
-        fsblkcnt_t min = _fsTotal / 20;
-        fsblkcnt_t optimal = _fsTotal / 10;
+        fsblkcnt_t min = _fsTotal  / 100 * _fullPercent;
+        fsblkcnt_t optimal = _fsTotal / 100 * _cleanPercent;
         while (true) {
             if (_fsFree < min ) {
                 while (_fsFree < optimal) {
@@ -277,11 +279,13 @@ class Directory {
     __pid_t _pid;
     fsblkcnt_t _fsFree;
     fsblkcnt_t _fsTotal;
+    uint _fullPercent;
+    uint _cleanPercent;
 };
 
 class HotDirectory: public Directory {
   public:
-    HotDirectory(const char *const path, const char *const archived) : Directory(path) {
+    HotDirectory(const char *const path, const char *const archived) : Directory(path, 90, 10) {
         strncpy(_archived, archived, _pathMaxLen);
     }
   private:
@@ -313,12 +317,12 @@ class HotDirectory: public Directory {
         stat(pathIn, &st);
         int fin = open(pathIn, O_RDONLY);
         if (fin < 0) {
-            printf("Failed to open input file %s, error: %d, %s\n", pathIn, errno, strerror(errno));;
+            printf("Failed to open input file %s, error: %d, %s\n", pathIn, errno, strerror(errno));
             throw std::runtime_error("Failed to open old file");
         }
         int fout = open(pathOut, O_WRONLY | O_CREAT, 0644);
         if (fout < 0) {
-            printf("Failed to open target file %s, error: %d, %s\n", pathOut, errno, strerror(errno));;
+            printf("Failed to open target file %s, error: %d, %s\n", pathOut, errno, strerror(errno));
             throw std::runtime_error("Failed to open target file");
         }
         size_t remain = st.st_size;
@@ -342,7 +346,7 @@ class HotDirectory: public Directory {
 
 class ArchivedDirectory: public Directory {
   public:
-    ArchivedDirectory(const char *const path) : Directory(path) {}
+    ArchivedDirectory(const char *const path) : Directory(path, 95, 90) {}
   private:
     void clean() {
         printf("Cleaning archived...\n");
