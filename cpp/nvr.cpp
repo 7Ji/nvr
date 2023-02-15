@@ -28,6 +28,7 @@ class Camera {
         std::strncpy(_name, name, lenName);
         std::snprintf(_url, _urlMaxLen, "rtsp://%s/%s", host, path);
         std::snprintf(_pathFormat, _urlMaxLen, "hot/%s_%%Y%%m%%d_%%H%%M%%S.mkv", name);
+        std::printf("Camera '%s' created with URL '%s' and strftime '%s'\n", _name, _url, _pathFormat);
     }
     void printUrl() {
         std::puts(_url);
@@ -38,9 +39,11 @@ class Camera {
             case -1:
                 throw std::runtime_error("Failed to fork");
             case 0:
+                std::printf("Camera worker started\n");
                 break;
             default:
                 _pid = pid;
+                std::printf("Forked a camera worker with pid %ld\n", _pid);
                 return;
         }
         time_t timeNow, timeFuture, timeDiff;
@@ -71,16 +74,19 @@ class Camera {
             record(path, timeDiff);
             for (iter = _children.begin(); iter != _children.end();) {
                 pid = *iter;
+                std::printf("Reaping child pid %ld...\n", pid);
                 r = waitpid(pid, &status, WNOHANG);
                 switch (r) {
                     case -1:
                         printf("Failed to wait for forked ffmpeg, error: %d, %s\n", errno, strerror(errno));
                         throw std::runtime_error("Child illegal");
                     case 0:
+                        std::printf("Child pid %ld not ended yet\n", pid);
                         ++iter;
                         break;
                     default:
                         if (r == pid) {
+                            std::printf("Child pid %ld ended\n", pid);
                             iter = _children.erase(iter);
                             break;
                         } else {
@@ -99,9 +105,11 @@ class Camera {
                 printf("Failed to fork to record to %s\n", path);
                 throw std::runtime_error("Failed to fork");
             case 0:
+                std::printf("Record worker started\n");
                 break;
             default:
                 _children.push_back(pid);
+                std::printf("Forked a record worker with pid %ld\n", pid);
                 sleep(duration);
                 return;
         }
@@ -110,7 +118,8 @@ class Camera {
         dup2(fdNull, 2);
         char durationStr[64];
         snprintf(durationStr, 64, "%ld", duration + 10);
-        execl(
+        std::printf("Recording '%s' from '%s' to '%s', duration '%s'\n", _name, _url, path, durationStr);
+        if (execl(
             /* Executable */
             "/usr/bin/ffmpeg",
             /* Itself */
@@ -126,11 +135,14 @@ class Camera {
             "-y", path,
             /* Sentry */
             NULL
-        );
+        )) {
+            std::printf("Failed to call ffmpeg, errno: %d, error: %s\n", errno, strerror(errno));
+            throw std::runtime_error("Failed to call ffmpeg");
+        }
     }
 
     void wait() {
-        printf("Waiting camera thread, pid %d\n", _pid);
+        printf("Waiting camera worker pid %d\n", _pid);
         int status;
         waitpid(_pid, &status, 0);
     }
@@ -166,17 +178,20 @@ class Directory {
         }
         _fullPercent = fullPercent;
         _cleanPercent = cleanPercent;
+        std::printf("Directory '%s' created with full-trigger at %u%% and cleaned-trigger at %u%%\n", path, fullPercent, cleanPercent);
     }
     void watch() {
         __pid_t pid = fork();
         switch (pid) {
             case -1:
-                printf("Failed to fork to watch %s\n", _path);
+                std::printf("Failed to fork to watch %s\n", _path);
                 throw std::runtime_error("Failed to fork");
             case 0:
+                std::printf("Directory watcher started\n");
                 break;
             default:
                 _pid = pid;
+                std::printf("Forked directory watcher with pid %ld\n", pid);
                 return;
         }
         update();
@@ -197,7 +212,7 @@ class Directory {
         }
     }
     void wait() {
-        printf("Waiting directory thread, pid %d\n", _pid);
+        printf("Waiting directory watcher pid %d\n", _pid);
         int status;
         sleep(60);
         waitpid(_pid, &status, 0);
@@ -208,6 +223,7 @@ class Directory {
 
   private:
     void updateEntries() {
+        std::printf("Updating entries of directory '%s'...\n", _path);
         _entries.clear();
         DIR *d = opendir(_path);
         if (d == NULL) {
@@ -245,12 +261,11 @@ class Directory {
             _entries.push_back(entry);
         }
         std::sort(_entries.begin(), _entries.end(), compareEntry);
-        // for (Entry &entry : _entries) {
-        //     printf("%ld: %s\n", entry.ctime, entry.path);
-        // }
         closedir(d);
+        std::printf("Directory '%s' has %lu entries\n", _path, _entries.size());
     }
     void updateSpace() {
+        std::printf("Updating space of directory '%s'...\n", _path);
         struct statvfs stVFS;
         int r = statvfs(_path, &stVFS);
         switch (r) {
@@ -265,6 +280,7 @@ class Directory {
         }
         _fsFree = stVFS.f_bfree;
         _fsTotal = stVFS.f_blocks;
+        std::printf("Space of directory '%s': free %lu, total %lu\n", _path, _fsFree, _fsTotal);
     }
     void update() {
         updateEntries();
@@ -298,6 +314,7 @@ class HotDirectory: public Directory {
             printf("Failed to generate archived path for %s\n", entry.name);
             throw std::runtime_error("Failed to generate new name");
         }
+        std::printf("Cleaning hot directory, archiving '%s' to '%s'...\n", entry.name, target);
         if (rename(entry.path, target) < 0) {
             int errnoStack = errno;
             switch (errnoStack) {
@@ -313,6 +330,7 @@ class HotDirectory: public Directory {
         }
     }
     void move(const char *const pathIn, const char *const pathOut) {
+        std::printf("Moving between filesystems: '%s' to '%s'...\n", pathIn, pathOut);
         struct stat st;
         stat(pathIn, &st);
         int fin = open(pathIn, O_RDONLY);
@@ -341,6 +359,7 @@ class HotDirectory: public Directory {
             printf("Failed to remove file %s, error: %d, %s\n", pathIn, errno, strerror(errno));
             throw std::runtime_error("Failed to remove file");
         }
+        std::printf("Moved between filesystems: '%s' to '%s'\n", pathIn, pathOut);
     }
 };
 
@@ -351,6 +370,7 @@ class ArchivedDirectory: public Directory {
     void clean() {
         printf("Cleaning archived...\n");
         Entry entry = _entries[-1];
+        std::printf("Cleaning archived directory, deleting '%s'...\n", entry.name);
         _entries.pop_back();
         if (unlink(entry.path) < 0) {
             printf("Failed to remove file %s, error: %d, %s\n", entry.path, errno, strerror(errno));
