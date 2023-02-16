@@ -165,7 +165,7 @@ class Directory {
         char path[512];
         time_t ctime;
     };
-    Directory(const char *const path, uint fullPercent, uint cleanPercent) {
+    Directory(const char *const path, uint minFree, uint maxFree) {
         std::strncpy(_path, path, _pathMaxLen);
         if (mkdir(path, 0700) == -1) {
             switch (errno) {
@@ -176,9 +176,9 @@ class Directory {
                     throw std::runtime_error("Failed to create directory");
             }
         }
-        _fullPercent = fullPercent;
-        _cleanPercent = cleanPercent;
-        std::printf("Directory '%s' created with full-trigger at %u%% and cleaned-trigger at %u%%\n", path, fullPercent, cleanPercent);
+        _minFree = minFree;
+        _maxFree = maxFree;
+        std::printf("Directory '%s' created with full-trigger at %u%% and cleaned-trigger at %u%%\n", path, minFree, maxFree);
     }
     void watch() {
         __pid_t pid = fork();
@@ -195,11 +195,11 @@ class Directory {
                 return;
         }
         update();
-        fsblkcnt_t min = _fsTotal  / 100 * _fullPercent;
-        fsblkcnt_t optimal = _fsTotal / 100 * _cleanPercent;
+        fsblkcnt_t minFree = _fsTotal  / 100 * _minFree;
+        fsblkcnt_t maxFree = _fsTotal / 100 * _maxFree;
         while (true) {
-            if (_fsFree < min ) {
-                while (_fsFree < optimal) {
+            if (_fsFree < minFree ) {
+                while (_fsFree < maxFree) {
                     clean();
                     updateSpace();
                 }
@@ -295,13 +295,13 @@ class Directory {
     __pid_t _pid;
     fsblkcnt_t _fsFree;
     fsblkcnt_t _fsTotal;
-    uint _fullPercent;
-    uint _cleanPercent;
+    uint _minFree;
+    uint _maxFree;
 };
 
 class HotDirectory: public Directory {
   public:
-    HotDirectory(const char *const path, const char *const archived) : Directory(path, 90, 10) {
+    HotDirectory(const char *const path, const char *const archived) : Directory(path, 10, 90) {
         strncpy(_archived, archived, _pathMaxLen);
     }
   private:
@@ -365,7 +365,7 @@ class HotDirectory: public Directory {
 
 class ArchivedDirectory: public Directory {
   public:
-    ArchivedDirectory(const char *const path) : Directory(path, 95, 90) {}
+    ArchivedDirectory(const char *const path) : Directory(path, 5, 10) {}
   private:
     void clean() {
         printf("Cleaning archived...\n");
