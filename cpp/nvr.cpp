@@ -82,7 +82,13 @@ class Camera {
                         throw std::runtime_error("Child illegal");
                     case 0:
                         std::printf("Child pid %ld not ended yet\n", pid);
-                        ++iter;
+                        if (_children.size() >= 2) {
+                            std::printf("Force killing child pid %ld\n", pid);
+                            kill(pid, SIGKILL);
+                            iter = _children.erase(iter);
+                        } else {
+                            ++iter;
+                        }
                         break;
                     default:
                         if (r == pid) {
@@ -265,7 +271,7 @@ class Directory {
         std::printf("Directory '%s' has %lu entries\n", _path, _entries.size());
     }
     void updateSpace() {
-        std::printf("Updating space of directory '%s'...\n", _path);
+        // std::printf("Updating space of directory '%s'...\n", _path);
         struct statvfs stVFS;
         int r = statvfs(_path, &stVFS);
         switch (r) {
@@ -280,7 +286,7 @@ class Directory {
         }
         _fsFree = stVFS.f_bfree;
         _fsTotal = stVFS.f_blocks;
-        std::printf("Space of directory '%s': free %lu, total %lu\n", _path, _fsFree, _fsTotal);
+        // std::printf("Space of directory '%s': free %lu, total %lu\n", _path, _fsFree, _fsTotal);
     }
     void update() {
         updateEntries();
