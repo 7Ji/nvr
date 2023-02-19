@@ -50,8 +50,6 @@ class Camera {
         tm tmStructNow, tmStructFuture;
         int minute;
         char path[_urlMaxLen];
-        int status;
-        int r;
         std::vector<__pid_t>::iterator iter;
         while (true) {
             timeNow = time(NULL);
@@ -72,35 +70,7 @@ class Camera {
                 throw std::runtime_error("Duration time too short");
             }
             record(path, timeDiff);
-            for (iter = _children.begin(); iter != _children.end();) {
-                pid = *iter;
-                std::printf("Reaping child pid %ld...\n", pid);
-                r = waitpid(pid, &status, WNOHANG);
-                switch (r) {
-                    case -1:
-                        printf("Failed to wait for forked ffmpeg, error: %d, %s\n", errno, strerror(errno));
-                        throw std::runtime_error("Child illegal");
-                    case 0:
-                        std::printf("Child pid %ld not ended yet\n", pid);
-                        if (_children.size() >= 2) {
-                            std::printf("Force killing child pid %ld\n", pid);
-                            kill(pid, SIGKILL);
-                            iter = _children.erase(iter);
-                        } else {
-                            ++iter;
-                        }
-                        break;
-                    default:
-                        if (r == pid) {
-                            std::printf("Child pid %ld ended\n", pid);
-                            iter = _children.erase(iter);
-                            break;
-                        } else {
-                            printf("Got pid %d when waiting for %d\n", r, pid);
-                            throw std::runtime_error("Waited PID is different from reported");
-                        }
-                }
-            }
+            reap_children();
         }
     }
 
@@ -114,8 +84,8 @@ class Camera {
                 std::printf("Record worker started\n");
                 break;
             default:
-                _children.push_back(pid);
                 std::printf("Forked a record worker with pid %ld\n", pid);
+                push_child(pid);
                 sleep(duration);
                 return;
         }
@@ -156,12 +126,64 @@ class Camera {
   private:
     static const uint _nameMaxLen = 128;
     static const uint _urlMaxLen = 1024;
-    std::vector <__pid_t> _children;
+    // std::vector <__pid_t> _children;
+    __pid_t _last_child = 0;
+    __pid_t _laster_child = 0;
     char _name[_nameMaxLen];
     uint _lenName;
     char _url[_urlMaxLen];
     char _pathFormat[_urlMaxLen];
     __pid_t _pid;
+
+    void push_child(__pid_t pid) {
+        if (pid <= 0) {
+            std::printf("Trying to push a child with non-positive pid %ld\n", pid);
+            throw std::runtime_error("Trying to push a child with non-positive pid");
+        }
+        if (_laster_child > 0) {
+            std::printf("Trying to kill laster child %ld\n", _laster_child);
+            kill_child(_laster_child);
+        }
+        _laster_child = _last_child;
+        _last_child = pid;
+    }
+    
+    void kill_child(__pid_t pid) {
+        int status;
+        if (pid > 0) {
+            kill(pid, SIGINT);
+            waitpid(pid, &status, 0);
+            std::printf("Child %ld killed with SIGINT with return code %i\n", _laster_child, status);
+        }
+    }
+
+    void reap_children() {
+        std::printf("Reaping children, last child %ld, laster child %ld\n", _last_child, _laster_child);
+        if (_laster_child > 0) {
+            kill_child(_laster_child);
+            _laster_child = 0;
+        }
+        int status;
+        int r = waitpid(_last_child, &status, WNOHANG);
+        switch (r) {
+            case -1:
+                printf("Failed to wait for forked ffmpeg, error: %d, %s\n", errno, strerror(errno));
+                throw std::runtime_error("Child illegal");
+            case 0:
+                std::printf("Child pid %ld not ended yet\n", _last_child);
+                break;
+            default:
+                if (r == _last_child) {
+                    std::printf("Child pid %ld ended\n", _last_child);
+                    _last_child = 0;
+                    break;
+                } else {
+                    printf("Got pid %d when waiting for %d\n", r, _last_child);
+                    throw std::runtime_error("Waited PID is different from reported");
+                }
+        }
+        _laster_child = _last_child;
+    }
 };
 
 class Directory {
@@ -307,7 +329,7 @@ class Directory {
 
 class HotDirectory: public Directory {
   public:
-    HotDirectory(const char *const path, const char *const archived) : Directory(path, 10, 90) {
+    HotDirectory(const char *const path, const char *const archived) : Directory(path, 50, 90) {
         strncpy(_archived, archived, _pathMaxLen);
     }
   private:
