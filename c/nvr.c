@@ -550,8 +550,8 @@ int camera_recorder(struct Camera const *const camera) {
                                     }
                                     break;
                                 default:
-                                    if (waited != child) {
-                                        fprintf(stderr, "Unexpected waited last child: want %d but get %d\n", child, waited);
+                                    if (waited != last_child) {
+                                        fprintf(stderr, "Unexpected waited last child: want %d but get %d\n", last_child, waited);
                                         return 3;
                                     }
                                     break;
