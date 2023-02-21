@@ -611,7 +611,6 @@ int camera_recorder(struct Camera const *const camera) {
             }
             last_child = child;
         }
-        break;
     }
     return 0;
 }
