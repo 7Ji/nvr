@@ -301,11 +301,13 @@ static inline int watcher_init(struct Space *const space, DIR **const dir, struc
     return 0;
 }
 
-int get_oldest(char *const oldest, size_t *const len, DIR *dir) {
+int get_oldest(char *const path_old, char *const name_old, DIR *dir) {
     struct dirent *entry;
     struct stat current;
     time_t oldest_mtime = 0;
-    oldest[0] = '\0';
+    char path_current[PATH_MAX];
+    name_old[0] = '\0';
+    char *name_current = stpncpy(path_current, path_old, name_old - path_old);
     while ((entry = readdir(dir))) {
         if (entry->d_type != DT_REG) {
             continue;
@@ -326,20 +328,25 @@ int get_oldest(char *const oldest, size_t *const len, DIR *dir) {
             default:
                 break;
         }
-        if (stat(entry->d_name, &current)) {
+        strncpy(name_current, entry->d_name, NAME_MAX);
+        // if (strncpy(name_current, entry->d_name, NAME_MAX) < 0) {
+        //     fprintf(stderr, "Failed to print file '%s' name to path, errno: %d, error: %s\n", entry->d_name, errno, strerror(errno));
+        //     continue;
+        // }
+        if (stat(path_current, &current)) {
             fprintf(stderr, "Failed to get stat of file '%s': errno: %d, error: %s\n", entry->d_name, errno, strerror(errno));
             continue;
         }
         if (current.st_mtim.tv_sec < oldest_mtime || oldest_mtime <= 0) {
             oldest_mtime = current.st_mtim.tv_sec;
-            strncpy(oldest, entry->d_name, NAME_MAX);
+            strncpy(name_old, entry->d_name, NAME_MAX);
         }
     }
-    *len = strnlen(oldest, NAME_MAX);
-    if (*len >= NAME_MAX && oldest[NAME_MAX]) {
-        fprintf(stderr, "Name too long: %s\n", oldest);
-        return 1;
-    }
+    // *len = strnlen(oldest, NAME_MAX);
+    // if (*len >= NAME_MAX && oldest[NAME_MAX]) {
+    //     fprintf(stderr, "Name too long: %s\n", oldest);
+    //     return 1;
+    // }
     return 0;
 }
 
@@ -387,10 +394,18 @@ int common_watcher(struct Storage const *const hot, struct Storage const *const 
         fprintf(stderr, "Failed to begin watching for folder '%s'\n", hot->name);
         return 1;
     }
-    char oldest[NAME_MAX];
     char path_old[PATH_MAX];
     char path_new[PATH_MAX];
-    size_t len_name;
+    char *name_old = stpncpy(path_old, hot->name, NAME_MAX);
+    // size_t len_dir_old = name_old - path_old;
+    char *name_new = NULL;
+    // size_t len_dir_new = 0;
+    if (cold) {
+        name_new = stpncpy(path_new, cold->name, NAME_MAX);
+        // len_dir_new = name_new - path_new;
+        *(name_new++) = '/';
+    }
+    *(name_old++) = '/';
     unsigned short cleaned;
     while (true) {
         if (update_space_further(&space, hot->name)) {
@@ -400,25 +415,26 @@ int common_watcher(struct Storage const *const hot, struct Storage const *const 
         }
         if (space.free <= space.from) {
             for (cleaned = 0; cleaned < 100; ++cleaned) { // Limit 100, to avoid endless loop
-                if (get_oldest(oldest, &len_name, dir)) {
+                if (get_oldest(path_old, name_old, dir)) {
                     fprintf(stderr, "Failed to get oldest file in folder '%s'\n", hot->name);
                     closedir(dir);
                     return 3;
                 }
                 rewinddir(dir);
-                if (!oldest[0]) {
+                if (!name_old[0]) {
                     /* No oldest file found */
                     break;
                 }
-                snprintf(path_old, PATH_MAX, "%s/%s", hot->name, oldest);
+                // snprintf(path_old, PATH_MAX, "%s/%s", hot->name, oldest);
                 if (cold) {
-                    snprintf(path_new, PATH_MAX, "%s/%s", cold->name, oldest);
+                    strncpy(name_new, name_old, NAME_MAX);
+                    // snprintf(path_new, PATH_MAX, "%s/%s", cold->name, oldest);
                     /* There is still colder layer, move to it */
-                    printf("Cleaning '%s', moving to '%s'...", path_old, path_new);
+                    printf("Cleaning '%s', moving to '%s'...\n", path_old, path_new);
                     if (rename(path_old, path_new) < 0) {
                         switch (errno) {
                             case ENOENT:
-                                fprintf(stderr, "Warning: source file '%s' does not exist now, did you remove it by yourself? Or is the disk broken?", path_old);
+                                fprintf(stderr, "Warning: source file '%s' does not exist now, did you remove it by yourself? Or is the disk broken?\n", path_old);
                                 break;
                             case EXDEV:
                                 move_between_fs(path_old, path_new);
@@ -430,8 +446,8 @@ int common_watcher(struct Storage const *const hot, struct Storage const *const 
                     }
                 } else {
                     /* There is no colder layer, just remove the file */
-                    printf("Cleaning '%s', removing...", oldest);
-                    unlink(oldest);
+                    printf("Cleaning '%s', removing...\n", path_old);
+                    unlink(path_old);
                     /* Don't care about result */
                     // if (unlink(oldest) < 0) {
                     //     fprintf(stderr, "Failed to remove file '%s', errno: %d, error: %s\n", oldest, errno, strerror(errno));
