@@ -540,50 +540,78 @@ int camera_recorder(struct Camera const *const camera) {
                 fputs("Child ffmpeg worker returned when it shouldn't, this is impossible!\n", stderr);
                 return -1;
             default:
-                sleep(time_diff);
-                switch (waited = waitpid(child, &status, WNOHANG)) {
+                break;
+        }
+        while (time_now < time_future) {
+            switch (waited = waitpid(child, &status, WNOHANG)) {
+                case -1:
+                    fprintf(stderr, "Failed to wait for child ffmpeg %d, errno: %d, error: %s\n", child, errno, strerror(errno));
+                    return 2;
+                case 0:
+                    break;
+                default:
+                    if (waited == child) {
+                        child = 0;
+                        break;
+                    } else {
+                        fprintf(stderr, "Unexpected waited child: want %d but get %d\n", child, waited);
+                        return 3;
+                    }
+            }
+            if (!child) {
+                break;
+            }
+            if (last_child) {
+                switch (waited = waitpid(last_child, &status, WNOHANG)) {
                     case -1:
-                        fprintf(stderr, "Failed to wait for child ffmpeg %d, errno: %d, error: %s\n", child, errno, strerror(errno));
-                        return 2;
+                        fprintf(stderr, "Failed to wait for last child ffmpeg %d, errno: %d, error: %s\n", last_child, errno, strerror(errno));
+                        return 4;
                     case 0:
-                        if (last_child) {
-                            switch (waited = waitpid(last_child, &status, WNOHANG)) {
-                                case -1:
-                                    fprintf(stderr, "Failed to wait for last child ffmpeg %d, errno: %d, error: %s\n", last_child, errno, strerror(errno));
-                                    return 3;
-                                case 0:
-                                    if (kill(last_child, SIGINT)) {
-                                        fprintf(stderr, "Failed to sent SIGINT to last child ffmpeg %d, errno: %d, error: %s\n", last_child, errno, strerror(errno));
-                                        return 4;
-                                    }
-                                    if ((waited = waitpid(last_child, &status, 0))) {
-                                        fprintf(stderr, "Failed to wait for killed last child ffmpeg %d, errno: %d, error: %s\n", last_child, errno, strerror(errno));
-                                        return 5;
-                                    }
-                                    if (waited != last_child) {
-                                        fprintf(stderr, "Unexpected waited killed last child: want %d but get %d\n", last_child, waited);
-                                        return 6;
-                                    }
-                                    break;
-                                default:
-                                    if (waited != last_child) {
-                                        fprintf(stderr, "Unexpected waited last child: want %d but get %d\n", last_child, waited);
-                                        return 3;
-                                    }
-                                    break;
-                            }
-                        }
-                        last_child = child;
                         break;
                     default:
-                        if (waited != child) {
-                            fprintf(stderr, "Unexpected waited child: want %d but get %d\n", child, waited);
-                            return 3;
+                        if (waited == last_child) {
+                            last_child = 0;
+                            break;
+                        } else {
+                            fprintf(stderr, "Unexpected waited last child: want %d but get %d\n", last_child, waited);
+                            return 5;
+                        }
+                }
+            }
+            time_diff = time_future - (time_now = time(NULL));
+            sleep(time_diff > 10 ? 10 : time_diff);
+        }
+        if (child) {
+            if (last_child) {
+                switch (waited = waitpid(last_child, &status, WNOHANG)) {
+                    case -1:
+                        fprintf(stderr, "Failed to wait for last child ffmpeg %d, errno: %d, error: %s\n", last_child, errno, strerror(errno));
+                        return 6;
+                    case 0:
+                        if (kill(last_child, SIGINT)) {
+                            fprintf(stderr, "Failed to sent SIGINT to last child ffmpeg %d, errno: %d, error: %s\n", last_child, errno, strerror(errno));
+                            return 7;
+                        }
+                        if ((waited = waitpid(last_child, &status, 0))) {
+                            fprintf(stderr, "Failed to wait for killed last child ffmpeg %d, errno: %d, error: %s\n", last_child, errno, strerror(errno));
+                            return 8;
+                        }
+                        if (waited != last_child) {
+                            fprintf(stderr, "Unexpected waited killed last child: want %d but get %d\n", last_child, waited);
+                            return 9;
+                        }
+                        break;
+                    default:
+                        if (waited != last_child) {
+                            fprintf(stderr, "Unexpected waited last child: want %d but get %d\n", last_child, waited);
+                            return 10;
                         }
                         break;
                 }
-                break;
+            }
+            last_child = child;
         }
+        break;
     }
     return 0;
 }
@@ -760,7 +788,7 @@ int main(int const argc, char *const argv[]) {
     pid_t waited;
     while (true) {
         for (unsigned short i = 0; i < children_count; ++i) {
-            if (waited = waitpid(children[i], &status, WNOHANG)) {
+            if ((waited = waitpid(children[i], &status, WNOHANG))) {
                 if (waited == -1) {
                     fprintf(stderr, "Failed to waitpid for child %d, errno: %d, error: %s\n", children[i], errno, strerror(errno));
                 } else {
@@ -777,7 +805,7 @@ int main(int const argc, char *const argv[]) {
                 break;
             }
         }
-        sleep(1);
+        sleep(10);
     }
     free(children);
     free(cameras.members);
