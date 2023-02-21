@@ -802,12 +802,12 @@ int main(int const argc, char *const argv[]) {
                     kill(children[j], SIGINT);
                     waitpid(children[j], &status, 0);
                 }
-                break;
+                free(children);
+                free(cameras.members);
+                return 12;
             }
         }
         sleep(10);
     }
-    free(children);
-    free(cameras.members);
-    return 12;
+    return 0;
 };
