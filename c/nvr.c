@@ -745,24 +745,41 @@ int main(int const argc, char *const argv[]) {
                 break;
         }
     }
+    unsigned short children_count = cameras.count + 2;
+    pid_t *children = malloc(children_count * sizeof *children);
+    if (!children) {
+        fprintf(stderr, "Failed to allocate memory for all children to further checkup, errno: %d, error: %s\n", errno, strerror(errno));
+        return 12;
+    }
+    for (unsigned short i = 0; i < cameras.count; ++i) {
+        children[i] = cameras.members[i].recorder;
+    }
+    children[cameras.count] = storages.hot.watcher;
+    children[cameras.count + 1] = storages.cold.watcher;
     int status;
-
-    puts("Waiting for cold storage watcher...");
-    waitpid(storages.cold.watcher, &status, 0);
-    printf("Cold storage wathcer returned with %d\n", status);
-
-    puts("Waiting for hot storage watcher...");
-    waitpid(storages.hot.watcher, &status, 0);
-    printf("Hot storage watcher returned with %d\n", status);
-
-    for (int i = 0; i < cameras.count; ++i) {
-        printf("Waiting for camera recorder %d of %d...", i + 1, cameras.count);
-        waitpid(cameras.members[i].recorder, &status, 0);
-        printf("Camera recorder returned with %d\n", status);
+    pid_t waited;
+    while (true) {
+        for (unsigned short i = 0; i < children_count; ++i) {
+            if (waited = waitpid(children[i], &status, WNOHANG)) {
+                if (waited == -1) {
+                    fprintf(stderr, "Failed to waitpid for child %d, errno: %d, error: %s\n", children[i], errno, strerror(errno));
+                } else {
+                    fprintf(stderr, "Child %d exited, status %d\n", children[i], status);
+                }
+                fputs("Sending SIGINT to all children before quiting\n", stderr);
+                for (unsigned short j = 0; j < children_count; ++j) {
+                    if (waited != -1 && i == j) {
+                        continue;
+                    }
+                    kill(children[j], SIGINT);
+                    waitpid(children[j], &status, 0);
+                }
+                break;
+            }
+        }
+        sleep(1);
     }
-
-    if (cameras.alloc) {
-        free(cameras.members);
-    }
-    return 0;
+    free(children);
+    free(cameras.members);
+    return 12;
 };
