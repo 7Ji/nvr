@@ -16,8 +16,6 @@
 #include <sys/statvfs.h>
 #include <sys/wait.h>
 #include <unistd.h>
-/* GLIBC extension */
-#include <getopt.h>
 /* Linux */
 #include <linux/limits.h>
 #include <sys/sendfile.h>
@@ -27,9 +25,7 @@
 #define STORAGE_NAME_MAXLEN     NAME_MAX+1
 #define CAMERA_NAME_MAXLEN      NAME_MAX / 2
 #define CAMERA_URL_MAXLEN       PATH_MAX
-#define CAMERA_STRFTIME_MAXLEN  PATH_MAX  
-#define CAMERA_ALLOC_BASE       5
-#define CAMERA_ALLOC_MULTIPLY   1.5
+#define CAMERA_STRFTIME_MAXLEN  PATH_MAX
 
 /* Structs */
 
@@ -62,21 +58,11 @@ struct Storage {
     /**
      * @brief pid of the cleaning watcher thread for this thread
     */
-    __pid_t watcher;
-};
-
-/**
- * @brief a struct to represent all storages
-*/
-struct Storages {
+    pid_t watcher;
     /**
-     * @brief the hot stoarge, things cleaned from here will be moved to cold storage
+     * @brief next storage
     */
-    struct Storage hot;
-    /**
-     * @brief the cold storage, things cleaned from here will be simply deleted
-    */
-    struct Storage cold;
+    struct Storage *next;
 };
 
 /**
@@ -98,25 +84,11 @@ struct Camera {
     /**
      * @brief pid of the record worker
     */
-   __pid_t recorder;
-};
-
-/**
- * @brief a struct to hold all cameras
-*/
-struct Cameras {
+    pid_t recorder;
     /**
-     * @brief count of cameras, actual, could not be larger than alloc
+     * @brief next camera
     */
-    unsigned short count;
-    /**
-     * @brief count of cameras that have been allocated memory for, could not be smaller than count
-    */
-    unsigned short alloc;
-    /**
-     * @brief all struct Camera members
-    */
-    struct Camera *members;
+    struct Camera *next;
 };
 
 /**
@@ -147,7 +119,20 @@ struct Space {
  * @brief function to output help message
 */
 void help() {
-    puts("No help message available yet");
+    puts(
+        "./nvr --storage [storage definition] (--storage [storage definition] (--storage [storage definition] (...)))\n"
+        "      --camera [camera definition] (--camera [camera definition] (--camera [camera definition] (...)))\n"
+        "      --help\n"
+        "      --version\n\n"
+        "  - [storage deinition]: [path]:[thresholds]\n"
+        "    - [path]: folder name or path, relative or absolute both fine\n"
+        "    - [thresholds]: [from]:[to]\n"
+        "      - [from]: when free space <= this percent, triggers cleaning\n"
+        "      - [to]: when free space >= this percent, stops cleaning\n"
+        "  - [camera definition]: [name]:[url]\n"
+        "    - [name]: \n"
+        "    - [url]: a valid input url for ffmpeg\n"
+    );
 }
 
 /**
@@ -216,18 +201,54 @@ int parse_threshold(struct Threshold *const threshold, char const *const string)
     return 0;
 }
 
+
+struct Storage *parse_storage(char const *const string) {
+    struct Storage *storage = malloc(sizeof *storage);
+    if (!storage) {
+        fprintf(stderr, "Failed to allocate memory for storage\n");
+        return NULL;
+    }
+    memset(storage, 0, sizeof *storage);
+    char const *seps[2] = {NULL, NULL};
+    unsigned short sep_id = 0;
+    for (char const *c = string; *c && sep_id < 2; ++c) {
+        if (*c == ':' && *(c + 1) != '\0') {
+            seps[sep_id++] = c;
+        }
+    }
+    if (sep_id < 2) {
+        fprintf(stderr, "Storage definition incomplete or empty (should be [path]:[from]:[to]): %s\n", string);
+        free(storage);
+        return NULL;
+    }
+    if (seps[0] == string) {
+        fprintf(stderr, "Storage path is empty: %s\n", string);
+        free(storage);
+        return NULL;
+    }
+    if (parse_threshold(&storage->threshold, seps[0] + 1)) {
+        fprintf(stderr, "Storage threshold invalid: %s\n", string);
+        free(storage);
+        return NULL;
+    }
+    strncpy(storage->name, string, seps[0] - string);
+    return storage;
+}
+
 /**
  * @brief parse the input string to a struct Camera
  * 
- * @param camera pointer to the struct Camaera that should be filled
- * @param hot pointer the struct Storage hot that will be used to get 
- *            the hot storage folder name, to be used to generate the
- *            camera's strftime formatter
  * @param string the source string that should be parsed
  * 
  * @returns 0 for success, non-0 for failure
 */
-int parse_camara(struct Camera *const camera, struct Storage const *const hot, char const *const string) {
+struct Camera *parse_camera(char const *const string) {
+    struct Camera *camera = malloc(sizeof *camera);
+    if (!camera) {
+        fprintf(stderr, "Failed to allocate memory for camera\n");
+        return NULL;
+    }
+    memset(camera, 0, sizeof *camera);
     bool parsed = false;
     for (char const *c = string; *c; ++c) {
         if (*c == ':' && *(c + 1) != '\0') {
@@ -239,10 +260,15 @@ int parse_camara(struct Camera *const camera, struct Storage const *const hot, c
     }
     if (!parsed) {
         fprintf(stderr, "Camera definition incomplete or empty (should be [name]:[url]): %s\n", string);
-        return 1;
+        free(camera);
+        return NULL;
     }
+    printf("Camera added with name '%s', url '%s'\n", camera->name, camera->url);
+    return camera;
+}
+
+int complete_camera(struct Camera *const camera, struct Storage const *const hot) {
     snprintf(camera->strftime, CAMERA_STRFTIME_MAXLEN, "%s/%s_%%Y%%m%%d_%%H%%M%%S.mkv", hot->name, camera->name);
-    printf("Camera added with name '%s', url '%s' and strftime '%s'\n", camera->name, camera->url, camera->strftime);
     return 0;
 }
 
@@ -387,36 +413,36 @@ int move_between_fs(char const *const path_old, char const *const path_new) {
     return 0;
 }
 
-int common_watcher(struct Storage const *const hot, struct Storage const *const cold) {
+int common_watcher(struct Storage const *const storage) {
     struct Space space = {0};
     DIR *dir;
-    if (watcher_init(&space, &dir, hot)) {
-        fprintf(stderr, "Failed to begin watching for folder '%s'\n", hot->name);
+    if (watcher_init(&space, &dir, storage)) {
+        fprintf(stderr, "Failed to begin watching for folder '%s'\n", storage->name);
         return 1;
     }
     char path_old[PATH_MAX];
     char path_new[PATH_MAX];
-    char *name_old = stpncpy(path_old, hot->name, NAME_MAX);
+    char *name_old = stpncpy(path_old, storage->name, NAME_MAX);
     // size_t len_dir_old = name_old - path_old;
     char *name_new = NULL;
     // size_t len_dir_new = 0;
-    if (cold) {
-        name_new = stpncpy(path_new, cold->name, NAME_MAX);
+    if (storage->next) {
+        name_new = stpncpy(path_new, storage->next->name, NAME_MAX);
         // len_dir_new = name_new - path_new;
         *(name_new++) = '/';
     }
     *(name_old++) = '/';
     unsigned short cleaned;
     while (true) {
-        if (update_space_further(&space, hot->name)) {
-            fprintf(stderr, "Failed to update disk space for folder '%s'\n", hot->name);
+        if (update_space_further(&space, storage->name)) {
+            fprintf(stderr, "Failed to update disk space for folder '%s'\n", storage->name);
             closedir(dir);
             return 2;
         }
         if (space.free <= space.from) {
             for (cleaned = 0; cleaned < 100; ++cleaned) { // Limit 100, to avoid endless loop
                 if (get_oldest(path_old, name_old, dir)) {
-                    fprintf(stderr, "Failed to get oldest file in folder '%s'\n", hot->name);
+                    fprintf(stderr, "Failed to get oldest file in folder '%s'\n", storage->name);
                     closedir(dir);
                     return 3;
                 }
@@ -425,8 +451,8 @@ int common_watcher(struct Storage const *const hot, struct Storage const *const 
                     /* No oldest file found */
                     break;
                 }
-                // snprintf(path_old, PATH_MAX, "%s/%s", hot->name, oldest);
-                if (cold) {
+                // snprintf(path_old, PATH_MAX, "%s/%s", storage->name, oldest);
+                if (storage->next) {
                     strncpy(name_new, name_old, NAME_MAX);
                     // snprintf(path_new, PATH_MAX, "%s/%s", cold->name, oldest);
                     /* There is still colder layer, move to it */
@@ -454,8 +480,8 @@ int common_watcher(struct Storage const *const hot, struct Storage const *const 
                     //     // return 4; Just continue
                     // }
                 }
-                if (update_space_further(&space, hot->name)) {
-                    fprintf(stderr, "Failed to update disk space for folder '%s' when cleaning\n", hot->name);
+                if (update_space_further(&space, storage->name)) {
+                    fprintf(stderr, "Failed to update disk space for folder '%s' when cleaning\n", storage->name);
                     closedir(dir);
                     return 4;
                 }
@@ -507,9 +533,9 @@ void camera_ffmpeg(char const *const url, time_t duration,  char const *const pa
 }
 
 int camera_recorder(struct Camera const *const camera) {
-    __pid_t child = 0;
-    __pid_t last_child = 0;
-    __pid_t waited;
+    pid_t child = 0;
+    pid_t last_child = 0;
+    pid_t waited;
     time_t time_now, time_future, time_diff;
     struct tm tms_now, tms_future;
     int minute;
@@ -615,198 +641,225 @@ int camera_recorder(struct Camera const *const camera) {
     return 0;
 }
 
-static inline int hot_watcher(struct Storage const *const hot, struct Storage const *const cold) {
-    return common_watcher(hot, cold);
+void free_camera(struct Camera *camera) {
+    if (camera->next) {
+        free_camera(camera->next);
+    }
+    if (camera->recorder) {
+        kill(camera->recorder, SIGINT);
+        int status;
+        waitpid(camera->recorder, &status, 0);
+        fprintf(stderr, "Killed a camera recorder %d with return value %d\n", camera->recorder, status);
+    }
+    free(camera);
 }
 
-static inline int cold_watcher(struct Storage const *const cold) {
-    return common_watcher(cold, NULL);
+void free_storage(struct Storage *storage) {
+    if (storage->next) {
+        free_storage(storage->next);
+    }
+    if (storage->watcher) {
+        kill(storage->watcher, SIGINT);
+        int status;
+        waitpid(storage->watcher, &status, 0);
+        fprintf(stderr, "Killed a storage watcher %d with return value %d\n", storage->watcher, status);
+    }
+    free(storage);
 }
+
+enum arg_type {
+    ILLEGAL,
+    CAMERA,
+    STORAGE
+};
 
 int main(int const argc, char *const argv[]) {
-    struct Storages storages = {
-        {"hot",  {10, 90}, 0},
-        {"archived", {5, 10}, 0}
-    };
-    int c, option_index = 0;
-    struct option const long_options[] = {
-        {"cold",            required_argument,  NULL,   'c'},
-        {"hot",             required_argument,  NULL,   'H'},
-        {"help",            no_argument,        NULL,   'h'},
-        {"threshold-hot",   required_argument,  NULL,   'T'},
-        {"threshold-cold",  required_argument,  NULL,   't'},
-        {"version",         no_argument,        NULL,   'v'},
-        {NULL,              0,                  NULL,   '\0'},
-    };
-    while ((c = getopt_long(argc, argv, "c:hH:T:t:v", long_options, &option_index)) != -1) {
-        switch (c) {
-            case 'c':
-                if (safe_strncpy(storages.cold.name, optarg, STORAGE_NAME_MAXLEN)) {
-                    fprintf(stderr, "Failed to copy string as cold storage name: %s\n", optarg);
-                    return 1;
-                }
-                break;
-            case 'H':
-                if (safe_strncpy(storages.hot.name, optarg, STORAGE_NAME_MAXLEN)) {
-                    fprintf(stderr, "Failed to copy string as hot storage name: %s\n", optarg);
-                    return 2;
-                }
-                break;
-            case 'h':
+    struct Camera *cameras = NULL;
+    struct Camera *camera_last = NULL;
+    unsigned short camera_count = 0;
+    struct Storage *storages = NULL;
+    struct Storage *storage_last = NULL;
+    unsigned short storage_count = 0;
+    enum arg_type arg_type;
+    int ret;
+    for (int i = 1; i < argc; ++i) {
+        arg_type = ILLEGAL;
+        if (argv[i][0] == '-' && argv[i][1] == '-' && argv[i][2]) {
+            if (!strncmp(argv[i] + 2, "help", 4)) {
                 help();
-                return 0;
-            case 'T':
-                if (parse_threshold(&storages.hot.threshold, optarg)) {
-                    fprintf(stderr, "Failed to parse threshold for hot storage: %s\n", optarg);
-                    return 3;
-                }
-                break;
-            case 't':
-                if (parse_threshold(&storages.cold.threshold, optarg)) {
-                    fprintf(stderr, "Failed to parse threshold for cold storage: %s\n", optarg);
-                    return 4;
-                }
-                break;
-            case 'v':
+                ret = 0;
+                goto free_all;
+            }
+            if (!strncmp(argv[i] + 2, "version", 7)) {
                 version();
-                return 0;
-            default:
-                fprintf(stderr, "Unrecognizable option %s\n", argv[optind-1]);
-                return 1;
+                ret = 0;
+                goto free_all;
+            }
+            if (!strncmp(argv[i] + 2, "camera", 6)) {
+                arg_type = CAMERA;
+            }
+            if (!strncmp(argv[i] + 2, "storage", 7)) {
+                arg_type = STORAGE;
+            }
         }
-    }
-    printf("Using '%s' as hot storage (threshold: from %hu%% to %hu%%) and '%s' as cold storage (threshold: from %u%% to %u%%) \n", storages.hot.name, storages.hot.threshold.from, storages.hot.threshold.to, storages.cold.name, storages.cold.threshold.from, storages.cold.threshold.to);
-    struct Cameras cameras = {0, 0, NULL};
-    struct Camera *camera_p;
-    for (int i = optind; i < argc; ++i) {
-        if (++cameras.count > cameras.alloc) {
-            if (cameras.alloc) {
-                cameras.alloc *= CAMERA_ALLOC_MULTIPLY;
-                if ((camera_p = realloc(cameras.members, cameras.alloc * sizeof *cameras.members))) {
-                    printf("Realloc cameras to %hu since count increased to %hu\n", cameras.alloc, cameras.count);
+        switch (arg_type) {
+            case ILLEGAL:
+                fprintf(stderr, "Illegal argument: %s\n", argv[i]);
+                help();
+                ret = 1;
+                goto free_all;
+            case CAMERA:
+            case STORAGE:
+                if (i == argc - 1) {
+                    fprintf(stderr, "Argument incomplete: %s\n", argv[i]);
+                    help();
+                    ret = 2;
+                    goto free_all;
+                }
+                if (arg_type == CAMERA) {
+                    struct Camera *camera_current = parse_camera(argv[i + 1]);
+                    if (!camera_current) {
+                        fprintf(stderr, "Error occured when trying to parse camera definition %s\n", argv[i + 1]);
+                        ret = 3;
+                        goto free_all;
+                    }
+                    if (cameras) {
+                        camera_last->next = camera_current;
+                    } else {
+                        cameras = camera_current;
+                    }
+                    camera_last = camera_current;
+                    ++camera_count;
                 } else {
-                    free(cameras.members);
-                    fprintf(stderr, "Failed to resize cameras to %hu\n", cameras.alloc);
-                    return 5;
+                    struct Storage *storage_current = parse_storage(argv[i + 1]);
+                    if (!storage_current) {
+                        fprintf(stderr, "Error occured when trying to parse storage definition %s\n", argv[i + 1]);
+                        ret = 4;
+                        goto free_all;
+                    }
+                    if (storages) {
+                        storage_last->next = storage_current;
+                    } else {
+                        storages = storage_current;
+                    }
+                    storage_last = storage_current;
+                    ++storage_count;
                 }
-            } else {
-                if ((camera_p = malloc(CAMERA_ALLOC_BASE * sizeof *cameras.members))) {
-                    cameras.alloc = CAMERA_ALLOC_BASE;
-                } else {
-                    fprintf(stderr, "Failed to allocate memory for %hu cameras\n", CAMERA_ALLOC_BASE);
-                    return 6;
-                }
-            }
-            cameras.members = camera_p;
-        }
-        camera_p = cameras.members + cameras.count - 1;
-        if (parse_camara(camera_p, &storages.hot, argv[i])) {
-            fprintf(stderr, "Failed to parse camera no %hu: %s\n", cameras.count, argv[i]);
-            return 7;
-        }
-        for (int j = 0; j < cameras.count - 1; ++j) {
-            if (!strncmp((cameras.members + j)->name, camera_p->name, CAMERA_NAME_MAXLEN)) {
-                fprintf(stderr, "Camera name duplicated: %s\n", camera_p->name);
-                return 8;
-            }
-        }
-    }
-    if (!cameras.count) {
-        fputs("No cameras defined\n", stderr);
-        return 12;
-    }
-    __pid_t child;
-    int r;
-    switch (child = fork()) {
-        case -1:
-            fprintf(stderr, "Failed to fork cold storage watcher, errno: %d, error: %s\n", errno, strerror(errno));
-            return 9;
-        case 0:
-            if ((r = cold_watcher(&storages.cold))) {
-                fprintf(stderr, "Cold storage watcher: bad things happended, return %d\n", r);
-                return 100 + r;
-            } else {
-                return 0;
-            }
-        default:
-            printf("Forked child %d as cold storage watcher\n", child);
-            storages.cold.watcher = child;
-            break;
-    }
-    switch (child = fork()) {
-        case -1:
-            fprintf(stderr, "Failed to fork hot storage watcher, errno: %d, error: %s\n", errno, strerror(errno));
-            return 10;
-        case 0:
-            if ((r = hot_watcher(&storages.hot, &storages.cold))) {
-                fprintf(stderr, "Hot storage watcher: bad things happended, return %d\n", r);
-                return 200 + r;
-            } else {
-                return 0;
-            }
-        default:
-            printf("Forked child %d as hot storage watcher\n", child);
-            storages.hot.watcher = child;
-            break;
-    }
-    for (int i = 0; i < cameras.count; ++i) {
-        struct Camera *camera = cameras.members + i;
-        switch (child = fork()) {
-            case -1:
-                fprintf(stderr, "Failed to fork camera recorder, errno: %d, error: %s\n", errno, strerror(errno));
-                for (int j = 0; j < i; ++i) {
-                    kill(cameras.members[j].recorder, SIGINT);
-                }
-                free(cameras.members);
-                return 11;
-            case 0:
-                if ((r = camera_recorder(camera))) {
-                    fprintf(stderr, "Camera recorder: bad things happended, return %d\n", r);
-                    return 300 + r;
-                } else {
-                    return 0;
-                }
-            default:
-                printf("Forked child %d as camera recorder\n", child);
-                camera->recorder = child;
+                ++i;
                 break;
         }
     }
-    unsigned short children_count = cameras.count + 2;
-    pid_t *children = malloc(children_count * sizeof *children);
-    if (!children) {
-        fprintf(stderr, "Failed to allocate memory for all children to further checkup, errno: %d, error: %s\n", errno, strerror(errno));
-        return 12;
+    if (!cameras || !storages) {
+        fprintf(stderr, "Either camera or storage not set, refuse to work. Camera: %s, Storage: %s\n", cameras ? "yes" : "no", storages ? "yes" : "no");
+        help();
+        ret = 5;
+        goto free_all;
     }
-    for (unsigned short i = 0; i < cameras.count; ++i) {
-        children[i] = cameras.members[i].recorder;
+    // pid_t *children = malloc(sizeof *children * (camera_count + storage_count));
+    // if (!children) {
+    //     ret = 6;
+    //     goto free_all;
+    // }
+    // unsigned child_id = 0;
+    for (struct Camera *camera = cameras; camera; camera = camera->next) {
+        complete_camera(camera, storages);
     }
-    children[cameras.count] = storages.hot.watcher;
-    children[cameras.count + 1] = storages.cold.watcher;
-    int status;
-    pid_t waited;
-    while (true) {
-        for (unsigned short i = 0; i < children_count; ++i) {
-            if ((waited = waitpid(children[i], &status, WNOHANG))) {
-                if (waited == -1) {
-                    fprintf(stderr, "Failed to waitpid for child %d, errno: %d, error: %s\n", children[i], errno, strerror(errno));
-                } else {
-                    fprintf(stderr, "Child %d exited, status %d\n", children[i], status);
+    printf("Working with %hu storages:\n", storage_count);
+    for (struct Storage *storage = storages; storage; storage = storage->next) {
+        printf("  %s clean threshods from %hu to %hu\n", storage->name, storage->threshold.from, storage->threshold.to);
+        pid_t child = fork();
+        switch (child) {
+            case -1:
+                fprintf(stderr, "Failed to fork storage watcher for %s, errno: %d, error: %s\n", storage->name, errno, strerror(errno));
+                ret = 6;
+                goto free_all;
+            case 0: {
+                int r = common_watcher(storage);
+                if (r) {
+                    fprintf(stderr, "Storage watcher for %s exited with %d\n", storage->name, r);
+                    return 100 + r;
                 }
-                fputs("Sending SIGINT to all children before quiting\n", stderr);
-                for (unsigned short j = 0; j < children_count; ++j) {
-                    if (waited != -1 && i == j) {
-                        continue;
-                    }
-                    kill(children[j], SIGINT);
-                    waitpid(children[j], &status, 0);
-                }
-                free(children);
-                free(cameras.members);
-                return 12;
+                printf("Storage watcher for %s exited cleanly\n", storage->name);
+                return 0;
             }
+            default:
+                storage->watcher = child;
+                // children[child_id++] = child;
+                break;
+        }
+    }
+    printf("Working with %hu cameras:\n", camera_count);
+    for (struct Camera *camera = cameras; camera; camera = camera->next) {
+        printf("  %s from %s strftime %s\n", camera->name, camera->url, camera->strftime);
+        pid_t child = fork();
+        switch (child) {
+            case -1:
+                fprintf(stderr, "Failed to fork camera recorder for %s, errno: %d, error: %s\n", camera->name, errno, strerror(errno));
+                ret = 7;
+                goto free_all;
+            case 0: {
+                int r = camera_recorder(camera);
+                if (r) {
+                    fprintf(stderr, "Camera recorder for %s exited with %d\n", camera->name, r);
+                    return 200 + r;
+                }
+                printf("Camera recorder for %s exited cleanly\n", camera->name);
+                return 0;
+            }
+            default:
+                camera->recorder = child;
+                // children[child_id++] = child;
+                break;
+        }
+    }
+
+    while (true) {
+        for (struct Storage *storage = storages; storage; storage = storage->next) {
+            int status;
+            pid_t waited = waitpid(storage->watcher, &status, WNOHANG);
+            switch (waited) {
+                case -1:
+                    fprintf(stderr, "Failed to waitpid for storage watcher %d for %s, errno: %d, error: %s\n", storage->watcher, storage->name, errno, strerror(errno));
+                    return 8;
+                    goto free_all;
+                case 0:
+                    break;
+                default:
+                    fprintf(stderr, "Storage watcher %d for %s exited with %d which is not supposed\n", storage->watcher, storage->name, status);
+                    storage->watcher = 0;
+                    return 9;
+                    goto free_all;
+
+            }
+        }
+        for (struct Camera *camera = cameras; camera; camera = camera->next) {
+            int status;
+            pid_t waited = waitpid(camera->recorder, &status, WNOHANG);
+            switch (waited) {
+                case -1:
+                    fprintf(stderr, "Failed to waitpid for camera recorder %d for %s, errno: %d, error: %s\n", camera->recorder, camera->name, errno, strerror(errno));
+                    return 10;
+                    goto free_all;
+                case 0:
+                    break;
+                default:
+                    fprintf(stderr, "Camera %d for %s exited with %d which is not supposed\n", camera->recorder, camera->name, status);
+                    camera->recorder = 0;
+                    return 11;
+                    goto free_all;
+            }
+
         }
         sleep(10);
     }
-    return 0;
+
+free_all:
+    fprintf(stderr, "Cleaning up before quiting...\n");
+    if (cameras) {
+        free_camera(cameras);
+    }
+    if (storages) {
+        free_storage(storages);
+    }
+    return ret;
 };
