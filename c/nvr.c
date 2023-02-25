@@ -440,7 +440,7 @@ int common_watcher(struct Storage const *const storage) {
             return 2;
         }
         if (space.free <= space.from) {
-            for (cleaned = 0; cleaned < 100; ++cleaned) { // Limit 100, to avoid endless loop
+            for (cleaned = 0; cleaned < 0xffff; ++cleaned) { // Limit 100, to avoid endless loop
                 if (get_oldest(path_old, name_old, dir)) {
                     fprintf(stderr, "Failed to get oldest file in folder '%s'\n", storage->name);
                     closedir(dir);
