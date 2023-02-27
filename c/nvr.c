@@ -618,7 +618,7 @@ int camera_recorder(struct Camera const *const camera) {
                             fprintf(stderr, "Failed to sent SIGINT to last child ffmpeg %d, errno: %d, error: %s\n", last_child, errno, strerror(errno));
                             return 7;
                         }
-                        if ((waited = waitpid(last_child, &status, 0))) {
+                        if ((waited = waitpid(last_child, &status, 0)) <= 0) {
                             fprintf(stderr, "Failed to wait for killed last child ffmpeg %d, errno: %d, error: %s\n", last_child, errno, strerror(errno));
                             return 8;
                         }
