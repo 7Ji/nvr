@@ -490,9 +490,9 @@ int common_watcher(struct Storage const *const storage) {
                 }
             }
             printf("Watcher: cleaned %hu files\n", cleaned);
-            sleep(600);
+            sleep(10);
         } else {
-            sleep(60);
+            sleep(1);
         }
     }
     closedir(dir);
