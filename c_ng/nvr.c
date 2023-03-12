@@ -480,24 +480,25 @@ int get_oldest(DIR *const dir, char *subpath_oldest, time_t *mtime_oldest, unsig
             }
             size_t const len_name = strlen(entry->d_name);
             char *const subpath_oldest_recursive = subpath_oldest + len_name + 1;
+            time_t const mtime_oldest_before = *mtime_oldest;
             unsigned long entries_count_recursive;
             if (get_oldest(dir_sub, subpath_oldest_recursive, mtime_oldest, &entries_count_recursive)) {
                 pr_error("Failed to get oldest from subfolder '%s'\n", entry->d_name);
                 closedir(dir_sub);
                 return 5;
             }
-            if (*subpath_oldest_recursive == '/') {
+            if (*mtime_oldest < mtime_oldest_before) {
                 subpath_oldest[0] = '/';
                 strncpy(subpath_oldest + 1, entry->d_name, len_name);
             }
             closedir(dir_sub);
             if (entries_count_recursive) {
-                entries_count += entries_count_recursive;
+                *entries_count += entries_count_recursive;
             } else {
                 if (unlinkat(dir_fd, entry->d_name, AT_REMOVEDIR) < 0) {
                     pr_error_with_errno("Failed to remove empty subfolder '%s'", entry->d_name);
                 }
-                --entries_count;
+                --*entries_count;
             }
             break;
         }
@@ -582,8 +583,8 @@ int storage_watcher(struct storage const *const storage) {
     bool const move_to_next = storage->next_storage;
     if (move_to_next) {
         strncpy(path_new, storage->next_storage->path, storage->next_storage->len_path);
-        subpath_new = path_new + storage->len_path;
-        len_path_new_allow = PATH_MAX - storage->len_path;
+        subpath_new = path_new + storage->next_storage->len_path;
+        len_path_new_allow = PATH_MAX - storage->next_storage->len_path;
     }
     while (true) {
         struct statvfs st;
@@ -740,25 +741,25 @@ int camera_recorder(struct camera const *const camera) {
                     return 3;
                 }
             }
-            if (!child) {
-                break;
-            }
             if (last_child) {
                 switch (waited = waitpid(last_child, &status, WNOHANG)) {
-                    case -1:
-                        pr_error_with_errno("Failed to wait for last child ffmpeg %d", last_child);
-                        return 4;
-                    case 0:
+                case -1:
+                    pr_error_with_errno("Failed to wait for last child ffmpeg %d", last_child);
+                    return 4;
+                case 0:
+                    break;
+                default:
+                    if (waited == last_child) {
+                        last_child = 0;
                         break;
-                    default:
-                        if (waited == last_child) {
-                            last_child = 0;
-                            break;
-                        } else {
-                            pr_error("Unexpected waited last child: want %d but get %d\n", last_child, waited);
-                            return 5;
-                        }
+                    } else {
+                        pr_error("Unexpected waited last child: want %d but get %d\n", last_child, waited);
+                        return 5;
+                    }
                 }
+            }
+            if (!child) {
+                break;
             }
             time_diff = time_future - (time_now = time(NULL));
             sleep(time_diff > 10 ? 10 : time_diff);
@@ -768,29 +769,29 @@ int camera_recorder(struct camera const *const camera) {
                 int status;
                 pid_t waited = waitpid(last_child, &status, WNOHANG);
                 switch (waited) {
-                    case -1:
-                        pr_error_with_errno("Failed to wait for last child ffmpeg %d", last_child);
-                        return 6;
-                    case 0:
-                        if (kill(last_child, SIGINT)) {
-                            pr_error_with_errno("Failed to sent SIGINT to last child ffmpeg %d", last_child);
-                            return 7;
-                        }
-                        if ((waited = waitpid(last_child, &status, 0)) <= 0) {
-                            pr_error_with_errno("Failed to wait for killed last child ffmpeg %d", last_child);
-                            return 8;
-                        }
-                        if (waited != last_child) {
-                            pr_error("Unexpected waited killed last child: want %d but get %d\n", last_child, waited);
-                            return 9;
-                        }
-                        break;
-                    default:
-                        if (waited != last_child) {
-                            pr_error("Unexpected waited last child: want %d but get %d\n", last_child, waited);
-                            return 10;
-                        }
-                        break;
+                case -1:
+                    pr_error_with_errno("Failed to wait for last child ffmpeg %d", last_child);
+                    return 6;
+                case 0:
+                    if (kill(last_child, SIGINT)) {
+                        pr_error_with_errno("Failed to sent SIGINT to last child ffmpeg %d", last_child);
+                        return 7;
+                    }
+                    if ((waited = waitpid(last_child, &status, 0)) <= 0) {
+                        pr_error_with_errno("Failed to wait for killed last child ffmpeg %d", last_child);
+                        return 8;
+                    }
+                    if (waited != last_child) {
+                        pr_error("Unexpected waited killed last child: want %d but get %d\n", last_child, waited);
+                        return 9;
+                    }
+                    break;
+                default:
+                    if (waited != last_child) {
+                        pr_error("Unexpected waited last child: want %d but get %d\n", last_child, waited);
+                        return 10;
+                    }
+                    break;
                 }
             }
             last_child = child;
