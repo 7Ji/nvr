@@ -449,6 +449,9 @@ int get_oldest(DIR *const dir, char *subpath_oldest, time_t *mtime_oldest, unsig
                 continue;
             }
         }
+        if (!strcmp(entry->d_name, "lost+found")) {
+            continue;
+        }
         ++*entries_count;
         switch (entry->d_type) {
         case DT_REG: {
