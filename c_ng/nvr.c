@@ -855,7 +855,22 @@ int wait_all(struct storage *const storage_head, struct camera *const camera_hea
     return 0;
 }
 
+int unbuffer() {
+    if (setvbuf(stdout, NULL, _IOLBF, BUFSIZ)) {
+        pr_error_with_errno("Failed to unbuffer stdout");
+        return 1;
+    }
+    if (setvbuf(stderr, NULL, _IOLBF, BUFSIZ)) {
+        pr_error_with_errno("Failed to unbuffer stderr");
+        return 2;
+    }
+    return 0;
+}
+
 int main(int const argc, char const *const argv[]) {
+    if (unbuffer()) {
+        return -1;
+    }
     if (argc < 2) {
         pr_error("Arguments too few\n");
         help();
