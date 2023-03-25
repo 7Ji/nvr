@@ -1,6 +1,7 @@
 BINARY = nvr
 CC ?= gcc
 STRIP ?= strip
+LDFLAGS = -lavformat -lavutil -lavcodec
 CFLAGS = -Wall -Wextra
 STATIC ?= 0
 DEBUG ?= 0
