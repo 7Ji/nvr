@@ -69,6 +69,7 @@ struct camera {
     pthread_t recorder_pthread;
 };
 
+/*
 struct fds {
     int null;
     int stdout_dup;
@@ -76,6 +77,7 @@ struct fds {
 };
 
 static struct fds fds = { -1, -1, -1 };
+*/
 
 static inline void help() {
     puts(
@@ -313,6 +315,7 @@ int storages_init(struct storage *const storage_head) {
     return 0;
 }
 
+/*
 int camera_init(struct camera const *const camera) {
     pr_warn("Checking if url '%s' works\n", camera->url);
     pid_t child = fork();
@@ -369,8 +372,10 @@ void *camera_init_thread(void *arg) {
     long r = camera_init((struct camera *)(arg));
     return (void *)r;
 }
+*/
 
 int cameras_init(struct camera *const camera_head, struct storage const *const storage_head) {
+    /*
     if ((fds.stdout_dup = dup(STDOUT_FILENO)) < 0) {
         pr_error_with_errno("Failed to duplicate stdout fd");
         return 1;
@@ -384,6 +389,7 @@ int cameras_init(struct camera *const camera_head, struct storage const *const s
         return 3;
     }
     unsigned short camera_count = 0;
+    */
     for (struct camera *camera_current = camera_head; camera_current; camera_current = camera_current->next_camera) {
         camera_current->storage = storage_head;
         // strncpy(camera_current->)
@@ -392,42 +398,42 @@ int cameras_init(struct camera *const camera_head, struct storage const *const s
         //     return 4;
         // }
         // snprintf(camera_current->)
-        ++camera_count;
+        // ++camera_count;
     }
-    if (camera_count > 1) { /* Only use threaded initialization when there are multiple cameras */
-        pthread_t *pthreads = malloc(sizeof *pthreads * camera_count);
-        if (!pthreads) {
-            pr_error_with_errno("Failed to allocate memory for pthreads to init cameras");
-            return 5;
-        }
-        pthread_t *pthread_current = pthreads;
-        for (struct camera *camera_current = camera_head; camera_current; camera_current = camera_current->next_camera) {
-            if (pthread_create(pthread_current++, NULL, camera_init_thread, (void *)(camera_current))) {
-                pr_error("Failed to create pthread to init camera for '%s'\n", camera_current->url);
-                free(pthreads);
-                return 6;
-            }
-        }
-        for (unsigned short pthread_id = 0; pthread_id < camera_count; ++pthread_id) {
-            long ret;
-            if (pthread_join(pthreads[pthread_id], (void **)&ret)) {
-                pr_error("Failed to join pthread\n");
-                free(pthreads);
-                return 7;
-            }
-            if (ret) {
-                pr_error("Failed to init camera\n");
-                free(pthreads);
-                return 8;
-            }
-        }
-        free(pthreads);
-    } else {
-        if (camera_init(camera_head)) {
-            pr_error("Failed to init camera for '%s'\n", camera_head->url);
-            return 9;
-        }
-    }
+    // if (camera_count > 1) { /* Only use threaded initialization when there are multiple cameras */
+    //     pthread_t *pthreads = malloc(sizeof *pthreads * camera_count);
+    //     if (!pthreads) {
+    //         pr_error_with_errno("Failed to allocate memory for pthreads to init cameras");
+    //         return 5;
+    //     }
+    //     pthread_t *pthread_current = pthreads;
+    //     for (struct camera *camera_current = camera_head; camera_current; camera_current = camera_current->next_camera) {
+    //         if (pthread_create(pthread_current++, NULL, camera_init_thread, (void *)(camera_current))) {
+    //             pr_error("Failed to create pthread to init camera for '%s'\n", camera_current->url);
+    //             free(pthreads);
+    //             return 6;
+    //         }
+    //     }
+    //     for (unsigned short pthread_id = 0; pthread_id < camera_count; ++pthread_id) {
+    //         long ret;
+    //         if (pthread_join(pthreads[pthread_id], (void **)&ret)) {
+    //             pr_error("Failed to join pthread\n");
+    //             free(pthreads);
+    //             return 7;
+    //         }
+    //         if (ret) {
+    //             pr_error("Failed to init camera\n");
+    //             free(pthreads);
+    //             return 8;
+    //         }
+    //     }
+    //     free(pthreads);
+    // } else {
+    //     if (camera_init(camera_head)) {
+    //         pr_error("Failed to init camera for '%s'\n", camera_head->url);
+    //         return 9;
+    //     }
+    // }
     return 0;
 }
 
@@ -871,7 +877,7 @@ int camera_recorder(struct camera const *const camera) {
         struct remux_thread_arg remux_thread_arg = {
             .in = camera->url,
             .out = path,
-            .duration = time_diff + 10
+            .duration = time_diff + 3
         };
         pr_warn("Recording from '%s' to '%s', duration %us\n", camera->url, path, remux_thread_arg.duration);
         pthread_t thread_remux_this;
@@ -885,7 +891,7 @@ int camera_recorder(struct camera const *const camera) {
             int r = pthread_tryjoin_np(thread_remux_this, (void **)&ret);
             switch (r) {
             case EBUSY:
-                sleep(1);
+                // sleep(1);
                 break;
             case 0:
                 if (ret) {
@@ -900,7 +906,7 @@ int camera_recorder(struct camera const *const camera) {
             if (thread_remux_running_last) {
                 switch ((r = pthread_tryjoin_np(thread_remux_last, (void **)&ret))) {
                 case EBUSY:
-                    sleep(1);
+                    // sleep(1);
                     break;
                 case 0:
                     if (ret) {
@@ -914,6 +920,7 @@ int camera_recorder(struct camera const *const camera) {
                 }
             }
             time_diff = time_future - (time_now = time(NULL));
+            pr_warn("Sleep %ld seconds, now %ld, till %ld\n", time_diff, time_now, time_future);
             sleep(time_diff > 10 ? 10 : time_diff);
         }
         if (thread_remux_running_this) {
@@ -926,7 +933,7 @@ int camera_recorder(struct camera const *const camera) {
                         pr_error("Faile to send kill signal to last remux thread for camera of url '%s'", camera->url);
                         return 1;
                     }
-                    sleep(1);
+                    // sleep(1);
                     switch ((r = pthread_tryjoin_np(thread_remux_last, (void **)&ret))) {
                     case EBUSY:
                         pr_error("Failed to kill pthread for last remux thread for camera of url '%s' for good", camera->url);
