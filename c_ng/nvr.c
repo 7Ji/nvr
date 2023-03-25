@@ -920,7 +920,6 @@ int camera_recorder(struct camera const *const camera) {
                 }
             }
             time_diff = time_future - (time_now = time(NULL));
-            pr_warn("Sleep %ld seconds, now %ld, till %ld\n", time_diff, time_now, time_future);
             sleep(time_diff > 10 ? 10 : time_diff);
         }
         if (thread_remux_running_this) {
