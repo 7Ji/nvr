@@ -12,3 +12,5 @@ clean: $(patsubst %,clean_%,$(C_IMPLEMENTATIONS))
 
 clean_%:
 	make -C $(patsubst clean_%,%,$@) clean
+
+fresh: clean all
