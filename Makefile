@@ -1,12 +1,14 @@
-c: c/nvr
-	make -C c
+C_IMPLEMENTATIONS=$(wildcard c*)
+# C_BINARIES=$(patsubst %,%/nvr,$(C_IMPLEMENTATIONS))
 
-cpp: cpp/nvr
-	make -C cpp
+.PHONY: clean c* *nvr
 
-all: c cpp
+all: $(C_IMPLEMENTATIONS)
 
-.PHONY: clean
+$(C_IMPLEMENTATIONS): c%:
+	make -C $@
 
-clean:
-	rm -f c{,pp}/nvr{,.o}
+clean: $(patsubst %,clean_%,$(C_IMPLEMENTATIONS))
+
+clean_%:
+	make -C $(patsubst clean_%,%,$@) clean
