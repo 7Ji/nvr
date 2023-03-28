@@ -14,14 +14,20 @@ struct camera {
     unsigned short len_name;
     char strftime[NAME_MAX];
     char url[PATH_MAX];
-    struct storage const *storage;
-    pthread_t recorder_pthread;
+    char path[PATH_MAX];
+    char *subpath;
+    size_t len_subpath_max;
+    // struct storage const *storage;
+    bool recorder_working_this;
+    bool recorder_working_last;
+    pthread_t recorder_thread_this;
+    pthread_t recorder_thread_last;
 };
 
 struct camera *parse_argument_camera(char const *arg);
 
 int cameras_init(struct camera *camera_head, struct storage const *storage_head);
 
-int cameras_start(struct camera *camera_head);
+int cameras_work(struct camera *camera_head);
 
 #endif

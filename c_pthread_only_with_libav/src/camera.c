@@ -8,6 +8,10 @@
 #include "mux.h"
 #include "mkdir.h"
 
+static struct storage const *storage;
+static time_t time_next = 0;
+static struct tm tms_now;
+
 struct camera *parse_argument_camera(char const *const arg) {
     pr_debug("Parsing camera definition: '%s'\n", arg);
     char const *seps[2];
@@ -70,159 +74,135 @@ struct camera *parse_argument_camera(char const *const arg) {
     return camera;
 }
 
-int cameras_init(struct camera *const camera_head, struct storage const *const storage_head) {
-    for (struct camera *camera_current = camera_head; camera_current; camera_current = camera_current->next_camera) {
-        camera_current->storage = storage_head;
+int cameras_init(struct camera *const camera_head, struct storage const *const storage_use) {
+    storage = storage_use;
+    for (struct camera *camera = camera_head; camera; camera = camera->next_camera) {
+        strncpy(camera->path, storage->path, storage->len_path);
+        camera->path[storage->len_path] = '/';
+        camera->subpath = camera->path + storage->len_path + 1;
+        camera->len_subpath_max = PATH_MAX - storage->len_path - 1;
     }
     return 0;
 }
-
-struct mux_thread_arg {
-    char const *in;
-    char const *out;
-    unsigned int duration;
-};
-
-static void *mux_thread(void *arg) {
-    struct mux_thread_arg *mux_thread_arg = arg;
-    long ret = mux(mux_thread_arg->in, mux_thread_arg->out, mux_thread_arg->duration);
-    return (void *)ret;
-};
-
-static int camera_recorder(struct camera const *const camera) {
-    char path[PATH_MAX];
-    strncpy(path, camera->storage->path, camera->storage->len_path);
-    path[camera->storage->len_path] = '/';
-    char *const subpath = path + camera->storage->len_path + 1;
-    size_t const len_subpath_max = PATH_MAX - camera->storage->len_path - 1;
-    pthread_t thread_mux_last;
-    bool thread_mux_running_this = false;
-    bool thread_mux_running_last = false;
-    while (true) {
-        time_t time_now = time(NULL);
-        struct tm tms_now;
-        localtime_r(&time_now, &tms_now);
-        size_t len = strftime(subpath, len_subpath_max, camera->strftime, &tms_now);
-        if (!len) {
-            pr_error_with_errno("Failed to create strftime file name");
-            return 1;
-        }
-        char *const suffix = subpath + len;
-        strncpy(suffix, ".mkv", 5);
-        if (mkdir_recursive_only_parent(path, 0755)) {
-            pr_error("Failed to mkdir for all parents for '%s'\n", path);
-            return 1;
-        }
-        struct tm tms_future = tms_now;
-        int minute = (tms_now.tm_min + 11) / 10 * 10;
-        if (minute >= 60) {
-            tms_future.tm_min = minute - 60;
-            ++tms_future.tm_hour;
-        } else {
-            tms_future.tm_min = minute;
-        }
-        tms_future.tm_sec = 0;
-        time_t time_future = mktime(&tms_future);
-        time_t time_diff = time_future - time_now;
-        struct mux_thread_arg mux_thread_arg = {
-            .in = camera->url,
-            .out = path,
-            .duration = time_diff + 3
-        };
-        pr_warn("Recording from '%s' to '%s', duration %us\n", camera->url, path, mux_thread_arg.duration);
-        pthread_t thread_mux_this;
-        if (pthread_create(&thread_mux_this, NULL, mux_thread, (void *)&mux_thread_arg)) {
-            pr_error_with_errno("Faile to create pthread to record camera of url '%s'", camera->url);
-            return 2;
-        }
-        thread_mux_running_this = true;
-        while (time_now < time_future && thread_mux_running_this) {
-            long ret;
-            int r = pthread_tryjoin_np(thread_mux_this, (void **)&ret);
-            switch (r) {
-            case EBUSY:
-                break;
-            case 0:
-                if (ret) {
-                    pr_error("Thread for remuxer of camera of url '%s' exited (with %ld) which is not expected, but we accept it\n", camera->url, ret);
-                }
-                thread_mux_running_this = false;
-                break;
-            default:
-                pr_error("Unexpected return from pthread_tryjoin_np: %d\n", r);
-                return 1;
-            }
-            if (thread_mux_running_last) {
-                switch ((r = pthread_tryjoin_np(thread_mux_last, (void **)&ret))) {
-                case EBUSY:
-                    break;
-                case 0:
-                    if (ret) {
-                        pr_error("Thread for remuxer of camera of url '%s' exited (with %ld) which is not expected, but we accept it\n", camera->url, ret);
-                    }
-                    thread_mux_running_last = false;
-                    break;
-                default:
-                    pr_error("Unexpected return from pthread_tryjoin_np: %d\n", r);
-                    return 1;
-                }
-            }
-            time_diff = time_future - (time_now = time(NULL));
-            sleep(time_diff > 10 ? 10 : time_diff);
-        }
-        if (thread_mux_running_this) {
-            if (thread_mux_running_last) {
-                long ret;
-                int r = pthread_tryjoin_np(thread_mux_last, (void **)&ret);
-                switch (r) {
-                case EBUSY:
-                    if (pthread_kill(thread_mux_last, SIGINT)) {
-                        pr_error("Faile to send kill signal to last remux thread for camera of url '%s'", camera->url);
-                        return 1;
-                    }
-                    switch ((r = pthread_tryjoin_np(thread_mux_last, (void **)&ret))) {
-                    case EBUSY:
-                        pr_error("Failed to kill pthread for last remux thread for camera of url '%s' for good", camera->url);
-                        return 1;
-                    case 0:
-                        if (ret) {
-                            pr_error("Thread for remuxer of camera of url '%s' exited (with %ld) which is not expected, but we accept it\n", camera->url, ret);
-                        }
-                        thread_mux_running_last = false;
-                        break;
-                    default:
-                        pr_error("Unexpected return from pthread_tryjoin_np: %d\n", r);
-                        return 1;
-                    }
-                    break;
-                case 0:
-                    if (ret) {
-                        pr_error("Thread for remuxer of camera of url '%s' exited (with %ld) which is not expected, but we accept it\n", camera->url, ret);
-                    }
-                    thread_mux_running_last = false;
-                    break;
-                default:
-                    pr_error("Unexpected return from pthread_tryjoin_np: %d\n", r);
-                    return 1;
-                }
-            }
-            thread_mux_last = thread_mux_this;
-            thread_mux_running_last = true;
-        }
+static int camera_record(struct camera *const camera) {
+    size_t len = strftime(camera->subpath, camera->len_subpath_max, camera->strftime, &tms_now);
+    if (!len) {
+        pr_error_with_errno("Failed to create strftime file name");
+        return 1;
+    }
+    char *const suffix = camera->subpath + len;
+    strncpy(suffix, ".mkv", 5);
+    if (mkdir_recursive_only_parent(camera->path, 0755)) {
+        pr_error("Failed to mkdir for all parents for '%s'\n", camera->path);
+        return 2;
+    }
+    unsigned duration = time_next + 5 - time(NULL);
+    if (duration > 3600) {
+        pr_warn("Duration limited from %us to 1h for '%s'\n", duration, camera->path);
+        duration = 3600;
+    } else if (duration < 10) {
+        pr_warn("Duration increased from %us to 10s for '%s'\n", duration, camera->path);
+        duration = 10;
+    }
+    pr_warn("Recording from '%s' to '%s', duration %us, thread %lx\n", camera->url, camera->path, duration, pthread_self());
+    if (mux(camera->url, camera->path, duration)) {
+        pr_error("Failed to record from '%s' to '%s' (path might be reused and changed), thread %lx\n", camera->url, camera->path, pthread_self());
+        return 3;
     }
     return 0;
 }
 
 static void *camera_record_thread(void *arg) {
-    long r = camera_recorder((struct camera *)(arg));
+    long r = camera_record((struct camera *)(arg));
     return (void *)r;
 }
-
-int cameras_start(struct camera *const camera_head) {
-    for (struct camera *camera_current = camera_head; camera_current; camera_current = camera_current->next_camera) {
-        if (pthread_create(&camera_current->recorder_pthread, NULL, camera_record_thread, (void *)camera_current)) {
-            pr_error("Failed to create pthread for camera_recorder for '%s'\n", camera_current->url);
-            return 1;
+int cameras_work(struct camera *const camera_head) {
+    time_t time_now = time(NULL);
+    long ret;
+    int r;
+    localtime_r(&time_now, &tms_now);
+    for (struct camera *camera = camera_head; camera; camera = camera->next_camera) {
+        if (camera->recorder_working_this) {
+            switch ((r = pthread_tryjoin_np(camera->recorder_thread_this, (void **)&ret))) {
+            case EBUSY:
+                break;
+            case 0:
+                if (ret) {
+                    pr_error("Camera recorder for url '%s' breaks with return value '%ld'\n", camera->url, ret);
+                    return 1;
+                }
+                camera->recorder_working_this = false;
+                break;
+            default:
+                pr_error("Unexpected return from pthread_tryjoin_np: %d\n", r);
+                return -1;
+            }
+        }
+        if (!camera->recorder_working_this) { /* It must be at least recording for 'this' */
+            if (pthread_create(&camera->recorder_thread_this, NULL, camera_record_thread, (void **)&camera)) {
+                pr_error("Failed to create thread to record camera for url '%s'\n", camera->url);
+                return 3;
+            }
+            camera->recorder_thread_this = true;
+        }
+        if (camera->recorder_working_last) {
+            switch ((r = pthread_tryjoin_np(camera->recorder_thread_last, (void **)&ret))) {
+            case EBUSY:
+                break;
+            case 0:
+                if (ret) {
+                    pr_error("Last camera recorder for url '%s' breaks with return value '%ld'\n", camera->url, ret);
+                    return 4;
+                }
+                camera->recorder_working_last = false;
+                break;
+            default:
+                pr_error("Unexpected return from pthread_tryjoin_np: %d\n", r);
+                return -1;
+            }
+        }
+    }
+    if (time_now >= time_next) {
+        struct tm tms_next = tms_now;
+        int minute = (tms_now.tm_min + 11) / 10 * 10;
+        if (minute >= 60) {
+            tms_next.tm_min = minute - 60;
+            ++tms_next.tm_hour;
+        } else {
+            tms_next.tm_min = minute;
+        }
+        tms_next.tm_sec = 0;
+        time_next = mktime(&tms_next);
+        for (struct camera *camera = camera_head; camera; camera = camera->next_camera) {
+            if (camera->recorder_working_this) {
+                if (camera->recorder_working_last) {
+                    if (pthread_kill(camera->recorder_thread_last, SIGINT)) {
+                        pr_error("Faile to send kill signal to last record thread for camera of url '%s'", camera->url);
+                        return 6;
+                    }
+                    switch ((r = pthread_tryjoin_np(camera->recorder_thread_last, (void **)&ret))) {
+                    case EBUSY:
+                        pr_error("Failed to kill pthread for last record thread for camera of url '%s' for good", camera->url);
+                        return 7;
+                    case 0:
+                        if (ret) {
+                            pr_error("Thread for killed recorder of camera of url '%s' breaks with %ld\n", camera->url, ret);
+                            return 8;
+                        }
+                        break;
+                    default:
+                        pr_error("Unexpected return from pthread_tryjoin_np: %d\n", r);
+                        return -1;
+                    }
+                }
+                camera->recorder_thread_last = camera->recorder_thread_this;
+                camera->recorder_working_last = true;
+            }
+            if (pthread_create(&camera->recorder_thread_this, NULL, camera_record_thread, (void **)&camera)) {
+                pr_error("Failed to create thread to record camera for url '%s'\n", camera->url);
+                return 3;
+            }
+            camera->recorder_working_this = true;
         }
     }
     return 0;
