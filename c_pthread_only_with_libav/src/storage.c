@@ -87,6 +87,17 @@ static int storage_init(struct storage *const storage) {
         pr_error_with_errno("Failed to open storage '%s'", storage->path);
         return 4;
     }
+    strncpy(storage->path_oldest, storage->path, storage->len_path + 1);
+    storage->subpath_oldest = storage->path_oldest + storage->len_path;
+    if (*storage->subpath_oldest) {
+        pr_error("Path of storage '%s' not properly ended or length %hu is not right\n", storage->path, storage->len_path);
+        return 5;
+    }
+    if ((storage->move_to_next = storage->next_storage)) {
+        strncpy(storage->path_new, storage->next_storage->path, storage->next_storage->len_path);
+        storage->subpath_new = storage->path_new + storage->next_storage->len_path;
+        storage->len_path_new_allow = PATH_MAX - storage->next_storage->len_path;
+    }
     return 0;
 }
 
@@ -243,82 +254,87 @@ static int move_file(char const *const path_old, char const *const path_new) {
 }
 
 
-static int storage_watcher(struct storage const *const storage) {
-    char path_oldest[PATH_MAX];
-    strncpy(path_oldest, storage->path, storage->len_path + 1);
-    char *subpath_oldest = path_oldest + storage->len_path;
-    if (*subpath_oldest) {
-        pr_error("Path of storage '%s' not properly ended or length %hu is not right\n", storage->path, storage->len_path);
-        return 1;
-    }
-    char path_new[PATH_MAX];
-    char *subpath_new;
-    size_t len_path_new_allow;
-    bool const move_to_next = storage->next_storage;
-    if (move_to_next) {
-        strncpy(path_new, storage->next_storage->path, storage->next_storage->len_path);
-        subpath_new = path_new + storage->next_storage->len_path;
-        len_path_new_allow = PATH_MAX - storage->next_storage->len_path;
-    }
-    while (true) {
+static int storage_clean(struct storage const *const storage) {
+    for (unsigned short i = 0; i < 0xffff; ++i) {
+        *storage->subpath_oldest = '\0';
+        rewinddir(storage->dir);
+        time_t mtime_oldest = LONG_MAX;
+        unsigned long entries_count;
+        if (get_oldest(storage->dir, storage->subpath_oldest, &mtime_oldest, &entries_count)) {
+            pr_error("Failed to get oldest in '%s'", storage->path);
+            return 2;
+        }
+        if (*storage->subpath_oldest == '/') {
+            pr_warn("Cleaning oldest file '%s' from storage '%s' (currently %lu entries)\n", storage->path_oldest, storage->path, entries_count);
+            if (storage->move_to_next) {
+                strncpy(storage->subpath_new, storage->subpath_oldest, storage->len_path_new_allow);
+                if (move_file(storage->path_oldest, storage->path_new)) {
+                    pr_error("Failed to move file '%s' to '%s'\n", storage->path_oldest, storage->path_new);
+                    return 3;
+                }
+                pr_warn("Moved file '%s' to '%s'\n", storage->path_oldest, storage->path_new);
+            } else {
+                if (unlink(storage->path_oldest) < 0) {
+                    pr_error_with_errno("Failed to unlink file '%s'\n", storage->path_oldest);
+                    return 3;
+                }
+                pr_warn("Removed file '%s'\n", storage->path_oldest);
+            }
+        }
         struct statvfs st;
         if (statvfs(storage->path, &st) < 0) {
             pr_error_with_errno("Failed to get vfs stat for '%s'", storage->path);
             return 1;
         }
-        if (st.f_bfree <= storage->space.from_free_blocks) {
-            for (unsigned short i = 0; i < 0xffff; ++i) {
-                *subpath_oldest = '\0';
-                rewinddir(storage->dir);
-                time_t mtime_oldest = LONG_MAX;
-                unsigned long entries_count;
-                if (get_oldest(storage->dir, subpath_oldest, &mtime_oldest, &entries_count)) {
-                    pr_error("Failed to get oldest in '%s'", storage->path);
+        if (st.f_bfree >= storage->space.to_free_blocks) {
+            pr_warn("Cleaned %hu record files in storage '%s'\n", i, storage->path);
+            return 0;
+        }
+    }
+    return 0;
+}
+
+static void *storage_clean_thread(void *arg) {
+    long r = storage_clean((struct storage *)arg);
+    return (void *)r;
+}
+
+int storages_clean(struct storage *const storage_head) {
+    while (true) {
+        for (struct storage *storage = storage_head; storage; storage = storage->next_storage) {
+            if (storage->cleaning) {
+                long ret;
+                int r = pthread_tryjoin_np(storage->cleaner_thread, (void **)&ret);
+                switch (r) {
+                case EBUSY:
+                    break;
+                case 0:
+                    if (ret) {
+                        pr_error("Cleaner for storage '%s' breaks with return value '%ld'\n", storage->path, ret);
+                        return 1;
+                    }
+                    storage->cleaning = false;
+                    break;
+                default:
+                    pr_error("Unexpected return from pthread_tryjoin_np: %d\n", r);
                     return 2;
                 }
-                if (*subpath_oldest == '/') {
-                    pr_warn("Cleaning oldest file '%s' from storage '%s' (currently %lu entries)\n", path_oldest, storage->path, entries_count);
-                    if (move_to_next) {
-                        strncpy(subpath_new, subpath_oldest, len_path_new_allow);
-                        if (move_file(path_oldest, path_new)) {
-                            pr_error("Failed to move file '%s' to '%s'\n", path_oldest, path_new);
-                            return 3;
-                        }
-                        pr_warn("Moved file '%s' to '%s'\n", path_oldest, path_new);
-                    } else {
-                        if (unlink(path_oldest) < 0) {
-                            pr_error_with_errno("Failed to unlink file '%s'\n", path_oldest);
-                            return 3;
-                        }
-                        pr_warn("Removed file '%s'\n", path_oldest);
-                    }
-                }
+            } else {
+                struct statvfs st;
                 if (statvfs(storage->path, &st) < 0) {
                     pr_error_with_errno("Failed to get vfs stat for '%s'", storage->path);
-                    return 1;
+                    return 3;
                 }
-                if (st.f_bfree >= storage->space.to_free_blocks) {
-                    pr_warn("Cleaned %hu record files in storage '%s'\n", i, storage->path);
-                    break;
+                if (st.f_bfree <= storage->space.from_free_blocks) {
+                    storage->cleaning = true;
+                    if (pthread_create(&storage->cleaner_thread, NULL, storage_clean_thread, (void *)storage)) {
+                        pr_error("Failed to create pthread for storage cleaner for storage '%s'\n", storage->path);
+                        return 4;
+                    }
+                    pr_warn("Started to clean storage '%s'\n", storage->path);
                 }
             }
         }
         sleep(1);
     }
-    return 0;
-}
-
-static void *storage_watch_thread(void *arg) {
-    long r = storage_watcher((struct storage *)arg);
-    return (void *)r;
-}
-
-int storages_start(struct storage *const storage_head) {
-    for (struct storage *storage_current = storage_head; storage_current; storage_current = storage_current->next_storage) {
-        if (pthread_create(&storage_current->watcher_pthread, NULL, storage_watch_thread, (void *)storage_current)) {
-            pr_error("Failed to create pthread for storage watcher for '%s'\n", storage_current->path);
-            return 1;
-        }
-    }
-    return 0;
 }

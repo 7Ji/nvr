@@ -13,27 +13,12 @@
 
 int wait_all(struct storage *const storage_head, struct camera *const camera_head) {
     while (true) {
-        for (struct storage *storage_current = storage_head; storage_current; storage_current = storage_current->next_storage) {
-            long ret;
-            int r = pthread_tryjoin_np(storage_current->watcher_pthread, (void **)&ret);
-            switch (r) {
-            case EBUSY:
-                sleep(1);
-                break;
-            case 0:
-                pr_error("Thread for storage watcher of '%s' exited (with %ld) which is not expected\n", storage_current->path, ret);
-                exit(EXIT_FAILURE);
-            default:
-                pr_error("Unpected return from pthread_tryjoin_np: %d\n", r);
-                return 1;
-            }
-        }
+        storages_clean(storage_head);
         for (struct camera *camera_current = camera_head; camera_current; camera_current = camera_current->next_camera) {
             long ret;
             int r = pthread_tryjoin_np(camera_current->recorder_pthread, (void **)&ret);
             switch (r) {
             case EBUSY:
-                sleep(1);
                 break;
             case 0:
                 pr_error("Thread for camera recorder of '%s' exited (with %ld) which is not expected\n", camera_current->url, ret);
@@ -142,17 +127,13 @@ int main(int const argc, char const *const argv[]) {
         pr_error("Failed to init cameras\n");
         return 10;
     }
-    if (storages_start(storage_head)) {
-        pr_error("Failed to start storage watchers\n");
-        return 11;
-    }
     if (cameras_start(camera_head)) {
         pr_error("Failed to start camera recorders\n");
-        return 12;
+        return 11;
     }
     if (wait_all(storage_head, camera_head)) {
         pr_error("Child thread exited\n");
-        return 13;
+        return 12;
     }
     return 0;
 }
