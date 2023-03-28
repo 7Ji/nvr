@@ -70,6 +70,8 @@ struct camera *parse_argument_camera(char const *const arg) {
     camera->url[len_url] = '\0';
     camera->len_name = len_name;
     camera->next_camera = NULL;
+    camera->recorder_working_this = false;
+    camera->recorder_working_last = false;
     pr_debug("Camera defitnition: name: '%s', strftime: '%s', url: '%s'\n", camera->name, camera->strftime, camera->url);
     return camera;
 }
