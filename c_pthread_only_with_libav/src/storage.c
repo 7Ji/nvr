@@ -300,41 +300,39 @@ static void *storage_clean_thread(void *arg) {
 }
 
 int storages_clean(struct storage *const storage_head) {
-    while (true) {
-        for (struct storage *storage = storage_head; storage; storage = storage->next_storage) {
-            if (storage->cleaning) {
-                long ret;
-                int r = pthread_tryjoin_np(storage->cleaner_thread, (void **)&ret);
-                switch (r) {
-                case EBUSY:
-                    break;
-                case 0:
-                    if (ret) {
-                        pr_error("Cleaner for storage '%s' breaks with return value '%ld'\n", storage->path, ret);
-                        return 1;
-                    }
-                    storage->cleaning = false;
-                    break;
-                default:
-                    pr_error("Unexpected return from pthread_tryjoin_np: %d\n", r);
-                    return 2;
+    for (struct storage *storage = storage_head; storage; storage = storage->next_storage) {
+        if (storage->cleaning) {
+            long ret;
+            int r = pthread_tryjoin_np(storage->cleaner_thread, (void **)&ret);
+            switch (r) {
+            case EBUSY:
+                break;
+            case 0:
+                if (ret) {
+                    pr_error("Cleaner for storage '%s' breaks with return value '%ld'\n", storage->path, ret);
+                    return 1;
                 }
-            } else {
-                struct statvfs st;
-                if (statvfs(storage->path, &st) < 0) {
-                    pr_error_with_errno("Failed to get vfs stat for '%s'", storage->path);
-                    return 3;
+                storage->cleaning = false;
+                break;
+            default:
+                pr_error("Unexpected return from pthread_tryjoin_np: %d\n", r);
+                return 2;
+            }
+        } else {
+            struct statvfs st;
+            if (statvfs(storage->path, &st) < 0) {
+                pr_error_with_errno("Failed to get vfs stat for '%s'", storage->path);
+                return 3;
+            }
+            if (st.f_bfree <= storage->space.from_free_blocks) {
+                storage->cleaning = true;
+                if (pthread_create(&storage->cleaner_thread, NULL, storage_clean_thread, (void *)storage)) {
+                    pr_error("Failed to create pthread for storage cleaner for storage '%s'\n", storage->path);
+                    return 4;
                 }
-                if (st.f_bfree <= storage->space.from_free_blocks) {
-                    storage->cleaning = true;
-                    if (pthread_create(&storage->cleaner_thread, NULL, storage_clean_thread, (void *)storage)) {
-                        pr_error("Failed to create pthread for storage cleaner for storage '%s'\n", storage->path);
-                        return 4;
-                    }
-                    pr_warn("Started to clean storage '%s'\n", storage->path);
-                }
+                pr_warn("Started to clean storage '%s'\n", storage->path);
             }
         }
-        sleep(1);
     }
+    return 0;
 }
