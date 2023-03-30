@@ -297,7 +297,7 @@ static int storage_clean(struct storage const *const storage) {
                 pr_warn("Removed file '%s'\n", storage->path_oldest);
             }
         }
-        if (storage_oneshot_cleaner) {
+        if (storage_oneshot_cleaner && storage->move_to_next) {
             return 0;
         }
         struct statvfs st;
