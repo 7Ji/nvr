@@ -37,6 +37,8 @@ struct storage {
     bool move_to_next;
 };
 
+void storage_parse_max_cleaners(char const *const arg);
+
 struct storage *parse_argument_storage(char const *arg);
 
 int storages_init(struct storage *storage_head);

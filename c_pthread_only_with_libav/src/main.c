@@ -92,6 +92,8 @@ int main(int const argc, char const *const argv[]) {
                     storage_last->next_storage = storage_current;
                 }
                 storage_last = storage_current;
+            } else if (!strncmp(arg, "max-cleaners", 13)) {
+                storage_parse_max_cleaners(argv[i]);
             } else {
                 pr_error("Illegal argument, unrecognized --argument: '%s'\n", argv[i - 1]);
                 return 5;

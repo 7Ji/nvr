@@ -12,6 +12,22 @@
 #include "argsep.h"
 #include "mkdir.h"
 
+static unsigned max_cleaners = 0;
+static unsigned running_cleaners = 0;
+bool storage_oneshot_cleaner = false;
+
+void storage_parse_max_cleaners(char const *const arg) {
+    long cleaners = strtol(arg, NULL, 10);
+    if (cleaners > 0) {
+        max_cleaners = cleaners;
+        storage_oneshot_cleaner = true;
+    } else {
+        max_cleaners = 0;
+        storage_oneshot_cleaner = false;
+    }
+    pr_warn("Limited max concurrent cleaners to %u, these cleaners will be one-shot only\n", max_cleaners);
+}
+
 struct storage *parse_argument_storage(char const *const arg) {
     pr_debug("Parsing storage definition: '%s'\n", arg);
     char const *seps[2];
@@ -281,6 +297,9 @@ static int storage_clean(struct storage const *const storage) {
                 pr_warn("Removed file '%s'\n", storage->path_oldest);
             }
         }
+        if (storage_oneshot_cleaner) {
+            return 0;
+        }
         struct statvfs st;
         if (statvfs(storage->path, &st) < 0) {
             pr_error_with_errno("Failed to get vfs stat for '%s'", storage->path);
@@ -313,12 +332,13 @@ int storages_clean(struct storage *const storage_head) {
                     return 1;
                 }
                 storage->cleaning = false;
+                --running_cleaners;
                 break;
             default:
                 pr_error("Unexpected return from pthread_tryjoin_np: %d\n", r);
                 return 2;
             }
-        } else {
+        } else if (!storage_oneshot_cleaner || running_cleaners < max_cleaners) {
             struct statvfs st;
             if (statvfs(storage->path, &st) < 0) {
                 pr_error_with_errno("Failed to get vfs stat for '%s'", storage->path);
@@ -326,6 +346,7 @@ int storages_clean(struct storage *const storage_head) {
             }
             if (st.f_bfree <= storage->space.from_free_blocks) {
                 storage->cleaning = true;
+                ++running_cleaners;
                 if (pthread_create(&storage->cleaner_thread, NULL, storage_clean_thread, (void *)storage)) {
                     pr_error("Failed to create pthread for storage cleaner for storage '%s'\n", storage->path);
                     return 4;
