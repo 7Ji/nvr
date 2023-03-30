@@ -19,7 +19,7 @@ static void log_packet(const AVFormatContext *fmt_ctx, const AVPacket *pkt, cons
 #define log_packet(fmt_ctx, pkg, tag)
 #endif
 
-int mux(char const *in_filename, char const *out_filename, unsigned int duration) {
+int mux(char const *in_filename, char const *out_filename, time_t time_end) {
     const AVOutputFormat *ofmt = NULL;
     AVFormatContext *ifmt_ctx = NULL, *ofmt_ctx = NULL;
     AVPacket *pkt = NULL;
@@ -27,7 +27,6 @@ int mux(char const *in_filename, char const *out_filename, unsigned int duration
     int stream_index = 0;
     int *stream_mapping = NULL;
     int stream_mapping_size = 0;
-    time_t time_start;
 
     pkt = av_packet_alloc();
     if (!pkt) {
@@ -107,9 +106,7 @@ int mux(char const *in_filename, char const *out_filename, unsigned int duration
         goto remux_end;
     }
 
-    time_start = time(NULL);
-
-    while (time(NULL) - time_start < duration) {
+    while (time(NULL) < time_end) {
         AVStream *in_stream, *out_stream;
 
         ret = av_read_frame(ifmt_ctx, pkt);
@@ -122,6 +119,7 @@ int mux(char const *in_filename, char const *out_filename, unsigned int duration
             av_packet_unref(pkt);
             continue;
         }
+        // pkt->
 
         pkt->stream_index = stream_mapping[pkt->stream_index];
         out_stream = ofmt_ctx->streams[pkt->stream_index];

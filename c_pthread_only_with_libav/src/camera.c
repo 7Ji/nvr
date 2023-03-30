@@ -98,19 +98,12 @@ static int camera_record(struct camera *const camera) {
         pr_error("Failed to mkdir for all parents for '%s'\n", camera->path);
         return 2;
     }
-    unsigned duration = time_next + 5 - time(NULL);
-    if (duration > 3600) {
-        pr_warn("Duration limited from %us to 1h for '%s'\n", duration, camera->path);
-        duration = 3600;
-    } else if (duration < 10) {
-        pr_warn("Duration increased from %us to 10s for '%s'\n", duration, camera->path);
-        duration = 10;
-    }
-    pr_warn("Recording from '%s' to '%s', duration %us, thread %lx\n", camera->url, camera->path, duration, pthread_self());
-    if (mux(camera->url, camera->path, duration)) {
+    pr_warn("Recording from '%s' to '%s', duration %lds, thread %lx\n", camera->url, camera->path, time_next - time(NULL), pthread_self());
+    if (mux(camera->url, camera->path, time_next + 5)) {
         pr_error("Failed to record from '%s' to '%s' (path might be reused and changed), thread %lx\n", camera->url, camera->path, pthread_self());
         return 3;
     }
+    pr_warn("Recording ended from '%s' to '%s' (path could've changed as we reuse memory)\n", camera->url, camera->path);
     return 0;
 }
 
