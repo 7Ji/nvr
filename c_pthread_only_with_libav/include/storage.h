@@ -9,23 +9,28 @@
 #include <pthread.h>
 #include <dirent.h>
 
-struct threshold {
-    unsigned short from_free_percent;
-    unsigned short to_free_percent;
+
+enum storage_threshold_type {
+    STORAGE_THRESHOLD_TYPE_PERCENT,
+    STORAGE_THRESHOLD_TYPE_SIZE,
+    STORAGE_THRESHOLD_TYPE_BLOCK
 };
 
-struct space {
-    fsblkcnt_t from_free_blocks;
-    fsblkcnt_t to_free_blocks;
+struct storage_threshold {
+    enum storage_threshold_type type;
+    size_t value;
+    fsblkcnt_t free_blocks;
+};
+
+struct storage_thresholds {
+    struct storage_threshold from, to;
 };
 
 struct storage {
     struct storage *next_storage;
     char path[PATH_MAX];
     unsigned short len_path;
-    struct threshold threshold;
-    struct space space;
-    // pthread_t watcher_pthread;
+    struct storage_thresholds thresholds;
     bool cleaning;
     pthread_t cleaner_thread;
     DIR *dir;

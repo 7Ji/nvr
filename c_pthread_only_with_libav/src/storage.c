@@ -16,6 +16,12 @@ static unsigned max_cleaners = 0;
 static unsigned running_cleaners = 0;
 bool storage_oneshot_cleaner = false;
 
+char const storage_threshold_type_strings[][8] = {
+    "percent",
+    "size",
+    "block"
+};
+
 void storage_parse_max_cleaners(char const *const arg) {
     long cleaners = strtol(arg, NULL, 10);
     if (cleaners > 0) {
@@ -25,7 +31,38 @@ void storage_parse_max_cleaners(char const *const arg) {
         max_cleaners = 0;
         storage_oneshot_cleaner = false;
     }
-    pr_warn("Limited max concurrent cleaners to %u, these cleaners will be one-shot only\n", max_cleaners);
+    pr_warn("Limited max concurrent cleaners to %u, do note these cleaners will be one-shot only and the cleaner end trigger might not work as intended\n", max_cleaners);
+}
+
+static enum storage_threshold_type parse_storage_thresholds(char const *const arg, size_t *const value) {
+    char *suffix;
+    *value = strtoul(arg, &suffix, 10);
+    switch (*suffix) {
+    case 'T':
+    case 't':
+        *value *= 0x400;
+        __attribute__((fallthrough));
+    case 'G':
+    case 'g':
+        *value *= 0x400;
+        __attribute__((fallthrough));
+    case 'M':
+    case 'm':
+        *value *= 0x400;
+        __attribute__((fallthrough));
+    case 'K':
+    case 'k':
+        *value *= 0x400;
+        __attribute__((fallthrough));
+    case 'B':
+    case 'b':
+        return STORAGE_THRESHOLD_TYPE_SIZE;
+    case '%':
+        return STORAGE_THRESHOLD_TYPE_PERCENT;
+    default:
+        return STORAGE_THRESHOLD_TYPE_BLOCK;
+    }
+    
 }
 
 struct storage *parse_argument_storage(char const *const arg) {
@@ -46,16 +83,10 @@ struct storage *parse_argument_storage(char const *const arg) {
         pr_error("Path in storage definition too long: '%s'\n", arg);
         return NULL;
     }
-    unsigned from_free_percent = strtoul(seps[0] + 1, NULL, 10);
-    unsigned to_free_percent = strtoul(seps[1] + 1, NULL, 10);
-    if (from_free_percent > to_free_percent) {
-        pr_error("From free percent (%hu%%) can not be equal larger than to free percent (%hu%%): '%s'\n", from_free_percent, to_free_percent, arg);
-        return NULL;
-    }
-    if (to_free_percent > 100) {
-        pr_error("To free percent (%hu%%) can not be larger than 100%%: '%s'\n", to_free_percent, arg);
-        return NULL;
-    }
+    size_t threshold_from_value;
+    enum storage_threshold_type threshold_from_type = parse_storage_thresholds(seps[0] + 1, &threshold_from_value);
+    size_t threshold_to_value;
+    enum storage_threshold_type threshold_to_type = parse_storage_thresholds(seps[1] + 1, &threshold_to_value);
     struct storage *storage = malloc(sizeof *storage);
     if (!storage) {
         pr_error_with_errno("Failed to allocate memory for storage");
@@ -64,11 +95,30 @@ struct storage *parse_argument_storage(char const *const arg) {
     strncpy(storage->path, arg, len_path);
     storage->path[len_path] = '\0';
     storage->len_path = len_path;
-    storage->threshold.from_free_percent = from_free_percent;
-    storage->threshold.to_free_percent = to_free_percent;
+    storage->thresholds.from.value = threshold_from_value;
+    storage->thresholds.from.type = threshold_from_type;
+    storage->thresholds.to.value = threshold_to_value;
+    storage->thresholds.to.type = threshold_to_type;
     storage->next_storage = NULL;
-    pr_debug("Storage defitnition: path: '%s' (length %hu), clean from free percent: %hu%%, clean to free percent: %hu%%\n", storage->path, storage->len_path, storage->threshold.from_free_percent, storage->threshold.to_free_percent);
+    pr_warn("Storage defitnition: path: '%s' (length %hu), clean from %lu (%s), to %lu (%s)\n", storage->path, storage->len_path, storage->thresholds.from.value, storage_threshold_type_strings[storage->thresholds.from.type], storage->thresholds.to.value, storage_threshold_type_strings[storage->thresholds.to.type]);
     return storage;
+}
+
+static void storage_init_thresholds(struct storage_threshold *const threshold, struct statvfs const *const st) {
+    switch (threshold->type) {
+    case STORAGE_THRESHOLD_TYPE_PERCENT:
+        threshold->free_blocks = st->f_blocks * threshold->value / 100;
+        break;
+    case STORAGE_THRESHOLD_TYPE_BLOCK:
+        threshold->free_blocks = threshold->value;
+        break;
+    case STORAGE_THRESHOLD_TYPE_SIZE:
+        threshold->free_blocks = threshold->value / st->f_frsize;
+        break;
+    }
+    if (threshold->free_blocks > st->f_blocks) {
+        threshold->free_blocks = st->f_blocks;
+    }
 }
 
 static int storage_init(struct storage *const storage) {
@@ -84,21 +134,9 @@ static int storage_init(struct storage *const storage) {
         pr_error("Storage '%s' has 0 blocks\n", storage->path);
         return 2;
     }
-    storage->space.from_free_blocks = st.f_blocks * storage->threshold.from_free_percent / 100;
-    storage->space.to_free_blocks = st.f_blocks * storage->threshold.to_free_percent / 100;
-    if (storage->space.from_free_blocks > st.f_blocks) {
-        storage->space.from_free_blocks = st.f_blocks;
-    }
-    if (storage->space.to_free_blocks > st.f_blocks) {
-        storage->space.to_free_blocks = st.f_blocks;
-    }
-    if (!storage->space.to_free_blocks) {
-        pr_error("Storage '%s' trigger: clean space to free blocks is 0, which will never work\n", storage->path);
-        return 3;
-    }
-    if (storage->space.from_free_blocks >= storage->space.to_free_blocks) {
-        storage->space.from_free_blocks = storage->space.to_free_blocks - 1;
-    }
+    storage_init_thresholds(&storage->thresholds.from, &st);
+    storage_init_thresholds(&storage->thresholds.to, &st);
+    pr_warn("Thresholds on storage '%s': from %lu free blocks to %lu free blocks, each block size %lu\n", storage->path, storage->thresholds.from.free_blocks, storage->thresholds.to.free_blocks, st.f_frsize);
     if (!(storage->dir = opendir(storage->path))) {
         pr_error_with_errno("Failed to open storage '%s'", storage->path);
         return 4;
@@ -305,7 +343,7 @@ static int storage_clean(struct storage const *const storage) {
             pr_error_with_errno("Failed to get vfs stat for '%s'", storage->path);
             return 1;
         }
-        if (st.f_bfree >= storage->space.to_free_blocks) {
+        if (st.f_bfree >= storage->thresholds.to.free_blocks) {
             pr_warn("Cleaned %hu record files in storage '%s'\n", i, storage->path);
             return 0;
         }
@@ -344,7 +382,7 @@ int storages_clean(struct storage *const storage_head) {
                 pr_error_with_errno("Failed to get vfs stat for '%s'", storage->path);
                 return 3;
             }
-            if (st.f_bfree <= storage->space.from_free_blocks) {
+            if (st.f_bfree <= storage->thresholds.from.free_blocks) {
                 storage->cleaning = true;
                 ++running_cleaners;
                 if (pthread_create(&storage->cleaner_thread, NULL, storage_clean_thread, (void *)storage)) {

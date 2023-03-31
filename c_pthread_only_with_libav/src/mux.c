@@ -3,6 +3,8 @@
 #include <libavutil/timestamp.h>
 #include <libavformat/avformat.h>
 
+#include "print.h"
+
 #ifdef DEBUGGING
 static void log_packet(const AVFormatContext *fmt_ctx, const AVPacket *pkt, const char *tag)
 {
