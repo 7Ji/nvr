@@ -48,8 +48,8 @@ struct storage *parse_argument_storage(char const *const arg) {
     }
     unsigned from_free_percent = strtoul(seps[0] + 1, NULL, 10);
     unsigned to_free_percent = strtoul(seps[1] + 1, NULL, 10);
-    if (from_free_percent >= to_free_percent) {
-        pr_error("From free percent (%hu%%) can not be equal to or larger than to free percent (%hu%%): '%s'\n", from_free_percent, to_free_percent, arg);
+    if (from_free_percent > to_free_percent) {
+        pr_error("From free percent (%hu%%) can not be equal larger than to free percent (%hu%%): '%s'\n", from_free_percent, to_free_percent, arg);
         return NULL;
     }
     if (to_free_percent > 100) {
