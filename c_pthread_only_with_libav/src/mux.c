@@ -32,17 +32,17 @@ int mux(char const *in_filename, char const *out_filename, time_t time_end) {
 
     pkt = av_packet_alloc();
     if (!pkt) {
-        fprintf(stderr, "Could not allocate AVPacket\n");
+        pr_error("Could not allocate AVPacket\n");
         return 1;
     }
 
     if ((ret = avformat_open_input(&ifmt_ctx, in_filename, 0, 0)) < 0) {
-        fprintf(stderr, "Could not open input file '%s'", in_filename);
+        pr_error("Could not open input file '%s'\n", in_filename);
         goto remux_end;
     }
 
     if ((ret = avformat_find_stream_info(ifmt_ctx, 0)) < 0) {
-        fprintf(stderr, "Failed to retrieve input stream information");
+        pr_error("Failed to retrieve input stream information\n");
         goto remux_end;
     }
 
@@ -50,7 +50,7 @@ int mux(char const *in_filename, char const *out_filename, time_t time_end) {
 
     avformat_alloc_output_context2(&ofmt_ctx, NULL, NULL, out_filename);
     if (!ofmt_ctx) {
-        fprintf(stderr, "Could not create output context\n");
+        pr_error("Could not create output context\n");
         ret = AVERROR_UNKNOWN;
         goto remux_end;
     }
@@ -80,14 +80,14 @@ int mux(char const *in_filename, char const *out_filename, time_t time_end) {
 
         out_stream = avformat_new_stream(ofmt_ctx, NULL);
         if (!out_stream) {
-            fprintf(stderr, "Failed allocating output stream\n");
+            pr_error("Failed allocating output stream\n");
             ret = AVERROR_UNKNOWN;
             goto remux_end;
         }
 
         ret = avcodec_parameters_copy(out_stream->codecpar, in_codecpar);
         if (ret < 0) {
-            fprintf(stderr, "Failed to copy codec parameters\n");
+            pr_error("Failed to copy codec parameters\n");
             goto remux_end;
         }
         out_stream->codecpar->codec_tag = 0;
@@ -97,14 +97,14 @@ int mux(char const *in_filename, char const *out_filename, time_t time_end) {
     if (!(ofmt->flags & AVFMT_NOFILE)) {
         ret = avio_open(&ofmt_ctx->pb, out_filename, AVIO_FLAG_WRITE);
         if (ret < 0) {
-            fprintf(stderr, "Could not open output file '%s'", out_filename);
+            pr_error("Could not open output file '%s'\n", out_filename);
             goto remux_end;
         }
     }
 
     ret = avformat_write_header(ofmt_ctx, NULL);
     if (ret < 0) {
-        fprintf(stderr, "Error occurred when opening output file\n");
+        pr_error("Error occurred when opening output file\n");
         goto remux_end;
     }
 
@@ -138,7 +138,7 @@ int mux(char const *in_filename, char const *out_filename, time_t time_end) {
          * This would be different if one used av_write_frame(). */
         if (ret < 0) {
             if (ret != AVERROR(EINVAL)) {
-                fprintf(stderr, "Error muxing packet\n");
+                pr_error("Error muxing packet\n");
                 break;
             }
         }
@@ -158,7 +158,7 @@ remux_end:
     av_freep(&stream_mapping);
 
     if (ret < 0 && ret != AVERROR_EOF) {
-        fprintf(stderr, "Error occurred: %s\n", av_err2str(ret));
+        pr_error("Error occurred: %s\n", av_err2str(ret));
         return 1;
     }
 
