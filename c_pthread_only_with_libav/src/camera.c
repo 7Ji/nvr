@@ -86,6 +86,7 @@ int cameras_init(struct camera *const camera_head, struct storage const *const s
     }
     return 0;
 }
+
 static int camera_record(struct camera *const camera) {
     size_t len = strftime(camera->subpath, camera->len_subpath_max, camera->strftime, &tms_now);
     if (!len) {
@@ -111,6 +112,7 @@ static void *camera_record_thread(void *arg) {
     long r = camera_record((struct camera *)(arg));
     return (void *)r;
 }
+
 int cameras_work(struct camera *const camera_head) {
     time_t time_now = time(NULL);
     long ret;
@@ -142,6 +144,8 @@ int cameras_work(struct camera *const camera_head) {
                         if (ret) {
                             pr_error("Thread for killed recorder of camera of url '%s' breaks with %ld\n", camera->url, ret);
                             return 3;
+                        } else {
+                            pr_warn("Last camera recorder for url '%s' safely ends\n", camera->url);
                         }
                         break;
                     default:
@@ -152,7 +156,7 @@ int cameras_work(struct camera *const camera_head) {
                 camera->recorder_thread_last = camera->recorder_thread_this;
                 camera->recorder_working_last = true;
             }
-            if (pthread_create(&camera->recorder_thread_this, NULL, camera_record_thread, (void **)camera)) {
+            if (pthread_create(&camera->recorder_thread_this, NULL, camera_record_thread, (void *)camera)) {
                 pr_error("Failed to create thread to record camera for url '%s'\n", camera->url);
                 return 3;
             }
@@ -168,6 +172,8 @@ int cameras_work(struct camera *const camera_head) {
                 if (ret) {
                     pr_error("Camera recorder for url '%s' breaks with return value '%ld'\n", camera->url, ret);
                     return 4;
+                } else {
+                    pr_warn("Camera recorder for url '%s' safely ends\n", camera->url);
                 }
                 camera->recorder_working_this = false;
                 break;
@@ -177,7 +183,7 @@ int cameras_work(struct camera *const camera_head) {
             }
         }
         if (!camera->recorder_working_this) { /* It must be at least recording for 'this' */
-            if (pthread_create(&camera->recorder_thread_this, NULL, camera_record_thread, (void **)camera)) {
+            if (pthread_create(&camera->recorder_thread_this, NULL, camera_record_thread, (void *)camera)) {
                 pr_error("Failed to create thread to record camera for url '%s'\n", camera->url);
                 return 5;
             }
@@ -191,6 +197,8 @@ int cameras_work(struct camera *const camera_head) {
                 if (ret) {
                     pr_error("Last camera recorder for url '%s' breaks with return value '%ld'\n", camera->url, ret);
                     return 6;
+                } else {
+                    pr_warn("Last camera recorder for url '%s' safely ends\n", camera->url);
                 }
                 camera->recorder_working_last = false;
                 break;
