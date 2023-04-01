@@ -187,7 +187,7 @@ int cameras_work(struct camera *const camera_head) {
                 pr_error("Failed to create thread to record camera for url '%s'\n", camera->url);
                 return 5;
             }
-            camera->recorder_thread_this = true;
+            camera->recorder_working_this = true;
         }
         if (camera->recorder_working_last) {
             switch ((r = pthread_tryjoin_np(camera->recorder_thread_last, (void **)&ret))) {
