@@ -62,13 +62,6 @@ int main(int const argc, char const *const argv[]) {
                 puts(version);
                 return 0;
             }
-            if (!strncmp(arg, "limit-move-across-fs", 21)) {
-                if (storage_limit_move_across_fs()) {
-                    pr_error("Failed to limit move across fs\n");
-                    return 2;
-                }
-                continue;
-            }
             if (++i == argc) {
                 pr_error("Illegal argument, needs suffix argument: '%s'\n", argv[i - 1]);
                 return 2;

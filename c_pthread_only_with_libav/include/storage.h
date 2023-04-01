@@ -33,6 +33,12 @@ struct storage {
     struct storage_thresholds thresholds;
     bool cleaning;
     pthread_t cleaner_thread;
+    bool half_duplex;
+    pthread_mutex_t io_mutex;
+    bool io_mutex_need_lock_this;
+    pthread_mutex_t *next_io_mutex;
+    bool io_mutex_need_lock_next;
+    bool io_mutex_need_lock;
     DIR *dir;
     char path_oldest[PATH_MAX];
     char *subpath_oldest;
@@ -41,8 +47,6 @@ struct storage {
     size_t len_path_new_allow;
     bool move_to_next;
 };
-
-int storage_limit_move_across_fs();
 
 void storage_parse_max_cleaners(char const *const arg);
 

@@ -12,19 +12,6 @@
 #include "argsep.h"
 #include "mkdir.h"
 
-bool storage_move_across_fs_limited = false;
-pthread_mutex_t storage_move_across_fs_mutex;
-
-int storage_limit_move_across_fs() {
-    storage_move_across_fs_limited = true;
-    if (pthread_mutex_init(&storage_move_across_fs_mutex, NULL)) {
-        pr_error("Failed to init the move across fs mutex\n");
-        return 1;
-    }
-    pr_warn("Limited move across fs, there could only be one simultaneous storage cleaners moving stuffs across fs\n");
-    return 0;
-};
-
 static unsigned max_cleaners = 0;
 static unsigned running_cleaners = 0;
 bool storage_oneshot_cleaner = false;
@@ -80,9 +67,9 @@ static enum storage_threshold_type parse_storage_thresholds(char const *const ar
 
 struct storage *parse_argument_storage(char const *const arg) {
     pr_debug("Parsing storage definition: '%s'\n", arg);
-    char const *seps[2];
+    char const *seps[3];
     char const *end = NULL;
-    unsigned short sep_id = parse_argument_seps(arg, seps, 2, &end);
+    unsigned short sep_id = parse_argument_seps(arg, seps, 3, &end);
     if (sep_id < 2) {
         pr_error("Storage definition incomplete: '%s'\n", arg);
         return NULL;
@@ -100,6 +87,13 @@ struct storage *parse_argument_storage(char const *const arg) {
     enum storage_threshold_type threshold_from_type = parse_storage_thresholds(seps[0] + 1, &threshold_from_value);
     size_t threshold_to_value;
     enum storage_threshold_type threshold_to_type = parse_storage_thresholds(seps[1] + 1, &threshold_to_value);
+    bool half_duplex = false;
+    if (sep_id > 2) {
+        if (!strncmp(seps[2] + 1, "half_duplex", 12)) {
+            pr_warn("Storage is half-duplex: '%s', only one of read and write will be performed on it at the same time\n", arg);
+            half_duplex = true;
+        }
+    }
     struct storage *storage = malloc(sizeof *storage);
     if (!storage) {
         pr_error_with_errno("Failed to allocate memory for storage");
@@ -112,6 +106,10 @@ struct storage *parse_argument_storage(char const *const arg) {
     storage->thresholds.from.type = threshold_from_type;
     storage->thresholds.to.value = threshold_to_value;
     storage->thresholds.to.type = threshold_to_type;
+    storage->half_duplex = half_duplex;
+    storage->io_mutex_need_lock = half_duplex;
+    storage->io_mutex_need_lock_this = half_duplex;
+    storage->io_mutex_need_lock_next = false;
     storage->next_storage = NULL;
     pr_warn("Storage defitnition: path: '%s' (length %hu), clean from %lu (%s), to %lu (%s)\n", storage->path, storage->len_path, storage->thresholds.from.value, storage_threshold_type_strings[storage->thresholds.from.type], storage->thresholds.to.value, storage_threshold_type_strings[storage->thresholds.to.type]);
     return storage;
@@ -160,10 +158,23 @@ static int storage_init(struct storage *const storage) {
         pr_error("Path of storage '%s' not properly ended or length %hu is not right\n", storage->path, storage->len_path);
         return 5;
     }
+    if (storage->half_duplex) {
+        // storage->io_mutex_need_lock_this = true;
+        // storage->io_mutex_need_lock = true;
+        if (pthread_mutex_init(&storage->io_mutex, NULL)) {
+            pr_error("Failed to init io mutex for storage '%s'\n", storage->path);
+            return 6;
+        }
+    }
     if ((storage->move_to_next = storage->next_storage)) {
         strncpy(storage->path_new, storage->next_storage->path, storage->next_storage->len_path);
         storage->subpath_new = storage->path_new + storage->next_storage->len_path;
         storage->len_path_new_allow = PATH_MAX - storage->next_storage->len_path;
+        if (storage->next_storage->half_duplex) {
+            storage->io_mutex_need_lock_next = true;
+            storage->io_mutex_need_lock = true;
+            storage->next_io_mutex = &storage->next_storage->io_mutex;
+        }
     }
     return 0;
 }
@@ -259,7 +270,7 @@ static int get_oldest(DIR *const dir, char *subpath_oldest, time_t *mtime_oldest
     return 0;
 }
 
-static int move_between_fs(char const *const path_old, char const *const path_new) {
+static int move_between_fs(char const *const path_old, char const *const path_new, struct storage *const storage) {
     struct stat st;
     if (stat(path_old, &st)) {
         pr_error_with_errno("Failed to get stat of old file '%s'", path_old);
@@ -278,19 +289,28 @@ static int move_between_fs(char const *const path_old, char const *const path_ne
     }
     size_t remain = st.st_size;
     ssize_t r;
-    if (storage_move_across_fs_limited) { /* Use two different branches to save time wasted on condition */
+    if (storage->io_mutex_need_lock) { /* Use two different branches to save time wasted on condition */
         while (remain) {
-            pthread_mutex_lock(&storage_move_across_fs_mutex);
+            if (storage->io_mutex_need_lock_this) {
+                pthread_mutex_lock(&storage->io_mutex);
+            }
+            if (storage->io_mutex_need_lock_next) {
+                pthread_mutex_lock(storage->next_io_mutex);
+            }
             r = sendfile(fout, fin, NULL, remain);
+            if (storage->io_mutex_need_lock_this) {
+                pthread_mutex_unlock(&storage->io_mutex);
+            }
+            if (storage->io_mutex_need_lock_next) {
+                pthread_mutex_unlock(storage->next_io_mutex);
+            }
             if (r < 0) {
                 close(fin);
                 close(fout);
                 pr_error_with_errno("Failed to send file '%s' -> '%s'", path_old, path_new);
-                pthread_mutex_unlock(&storage_move_across_fs_mutex);
                 return 4;
             }
             remain -= r;
-            pthread_mutex_unlock(&storage_move_across_fs_mutex);
         }
     } else {
         while (remain) {
@@ -312,7 +332,7 @@ static int move_between_fs(char const *const path_old, char const *const path_ne
     return 0;
 }
 
-static int move_file(char const *const path_old, char const *const path_new) {
+static int move_file(char const *const path_old, char const *const path_new, struct storage *const storage) {
     if (mkdir_recursive_only_parent(path_new, 0755)) {
         pr_error("Failed to create parent folders for '%s'", path_new);
         return 1;
@@ -323,7 +343,7 @@ static int move_file(char const *const path_old, char const *const path_new) {
             pr_error("Old file '%s' does not exist now, did you remove it by yourself? Or is the disk broken? Ignore that for now", path_old);
             return 0;
         case EXDEV:
-            if (move_between_fs(path_old, path_new)) {
+            if (move_between_fs(path_old, path_new, storage)) {
                 pr_error("Failed to move '%s' to '%s' across fs\n", path_old, path_new);
                 return 2;
             }
@@ -337,9 +357,13 @@ static int move_file(char const *const path_old, char const *const path_new) {
 }
 
 
-static int storage_clean(struct storage const *const storage) {
+static int storage_clean(struct storage *const storage) {
     bool oneshot_clean = storage_oneshot_cleaner && storage->move_to_next;
     for (unsigned short i = 0; i < 0xffff; ++i) {
+        while (storage->next_storage->cleaning) {
+            pr_debug("Cleaner for '%s' waiting for cleaner for next storage '%s' to complete\n", storage->path, storage->next_storage->path);
+            sleep(1);
+        }
         *storage->subpath_oldest = '\0';
         rewinddir(storage->dir);
         time_t mtime_oldest = LONG_MAX;
@@ -352,7 +376,7 @@ static int storage_clean(struct storage const *const storage) {
             pr_warn("Cleaning oldest file '%s' from storage '%s' (currently %lu entries)\n", storage->path_oldest, storage->path, entries_count);
             if (storage->move_to_next) {
                 strncpy(storage->subpath_new, storage->subpath_oldest, storage->len_path_new_allow);
-                if (move_file(storage->path_oldest, storage->path_new)) {
+                if (move_file(storage->path_oldest, storage->path_new, storage)) {
                     pr_error("Failed to move file '%s' to '%s'\n", storage->path_oldest, storage->path_new);
                     return 3;
                 }
