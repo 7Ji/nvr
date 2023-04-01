@@ -374,7 +374,7 @@ static int storage_clean(struct storage const *const storage) {
             return 1;
         }
         if (st.f_bfree >= storage->thresholds.to.free_blocks) {
-            pr_warn("Cleaned %hu record files in storage '%s'\n", i, storage->path);
+            pr_warn("Cleaned %hu record files in storage '%s'\n", i + 1, storage->path);
             return 0;
         }
     }
