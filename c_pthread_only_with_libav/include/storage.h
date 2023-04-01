@@ -42,6 +42,8 @@ struct storage {
     bool move_to_next;
 };
 
+int storage_limit_move_across_fs();
+
 void storage_parse_max_cleaners(char const *const arg);
 
 struct storage *parse_argument_storage(char const *arg);

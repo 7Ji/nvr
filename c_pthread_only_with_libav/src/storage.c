@@ -12,6 +12,19 @@
 #include "argsep.h"
 #include "mkdir.h"
 
+bool storage_move_across_fs_limited = false;
+pthread_mutex_t storage_move_across_fs_mutex;
+
+int storage_limit_move_across_fs() {
+    storage_move_across_fs_limited = true;
+    if (pthread_mutex_init(&storage_move_across_fs_mutex, NULL)) {
+        pr_error("Failed to init the move across fs mutex\n");
+        return 1;
+    }
+    pr_warn("Limited move across fs, there could only be one simultaneous storage cleaners moving stuffs across fs\n");
+    return 0;
+};
+
 static unsigned max_cleaners = 0;
 static unsigned running_cleaners = 0;
 bool storage_oneshot_cleaner = false;
@@ -265,15 +278,31 @@ static int move_between_fs(char const *const path_old, char const *const path_ne
     }
     size_t remain = st.st_size;
     ssize_t r;
-    while (remain) {
-        r = sendfile(fout, fin, NULL, remain);
-        if (r < 0) {
-            close(fin);
-            close(fout);
-            pr_error_with_errno("Failed to send file '%s' -> '%s'", path_old, path_new);
-            return 4;
+    if (storage_move_across_fs_limited) { /* Use two different branches to save time wasted on condition */
+        while (remain) {
+            pthread_mutex_lock(&storage_move_across_fs_mutex);
+            r = sendfile(fout, fin, NULL, remain);
+            if (r < 0) {
+                close(fin);
+                close(fout);
+                pr_error_with_errno("Failed to send file '%s' -> '%s'", path_old, path_new);
+                pthread_mutex_unlock(&storage_move_across_fs_mutex);
+                return 4;
+            }
+            remain -= r;
+            pthread_mutex_unlock(&storage_move_across_fs_mutex);
         }
-        remain -= r;
+    } else {
+        while (remain) {
+            r = sendfile(fout, fin, NULL, remain);
+            if (r < 0) {
+                close(fin);
+                close(fout);
+                pr_error_with_errno("Failed to send file '%s' -> '%s'", path_old, path_new);
+                return 4;
+            }
+            remain -= r;
+        }
     }
     close(fin);
     close(fout);
@@ -309,6 +338,7 @@ static int move_file(char const *const path_old, char const *const path_new) {
 
 
 static int storage_clean(struct storage const *const storage) {
+    bool oneshot_clean = storage_oneshot_cleaner && storage->move_to_next;
     for (unsigned short i = 0; i < 0xffff; ++i) {
         *storage->subpath_oldest = '\0';
         rewinddir(storage->dir);
@@ -335,7 +365,7 @@ static int storage_clean(struct storage const *const storage) {
                 pr_warn("Removed file '%s'\n", storage->path_oldest);
             }
         }
-        if (storage_oneshot_cleaner && storage->move_to_next) {
+        if (oneshot_clean) {
             return 0;
         }
         struct statvfs st;
