@@ -72,6 +72,7 @@ struct camera *parse_argument_camera(char const *const arg) {
     camera->next_camera = NULL;
     camera->recorder_working_this = false;
     camera->recorder_working_last = false;
+    camera->breaks = 0;
     pr_debug("Camera defitnition: name: '%s', strftime: '%s', url: '%s'\n", camera->name, camera->strftime, camera->url);
     return camera;
 }
@@ -143,9 +144,11 @@ int cameras_work(struct camera *const camera_head) {
                     case 0:
                         if (ret) {
                             pr_error("Thread for killed recorder of camera of url '%s' breaks with %ld\n", camera->url, ret);
-                            return 3;
+                            ++camera->breaks;
+                            // return 3;
                         } else {
                             pr_warn("Last camera recorder for url '%s' safely ends\n", camera->url);
+                            camera->breaks = 0;
                         }
                         break;
                     default:
@@ -171,9 +174,10 @@ int cameras_work(struct camera *const camera_head) {
             case 0:
                 if (ret) {
                     pr_error("Camera recorder for url '%s' breaks with return value '%ld'\n", camera->url, ret);
-                    return 4;
+                    ++camera->breaks;
                 } else {
                     pr_warn("Camera recorder for url '%s' safely ends\n", camera->url);
+                    camera->breaks = 0;
                 }
                 camera->recorder_working_this = false;
                 break;
@@ -196,9 +200,10 @@ int cameras_work(struct camera *const camera_head) {
             case 0:
                 if (ret) {
                     pr_error("Last camera recorder for url '%s' breaks with return value '%ld'\n", camera->url, ret);
-                    return 6;
+                    ++camera->breaks;
                 } else {
                     pr_warn("Last camera recorder for url '%s' safely ends\n", camera->url);
+                    camera->breaks = 0;
                 }
                 camera->recorder_working_last = false;
                 break;
@@ -206,6 +211,11 @@ int cameras_work(struct camera *const camera_head) {
                 pr_error("Unexpected return from pthread_tryjoin_np: %d\n", r);
                 return -1;
             }
+        }
+        if (camera->breaks > 100) {
+            pr_error("Camera for url '%s' breaks %u times\n", camera->breaks);
+        } else if (camera->breaks > 10) {
+            pr_warn("Camera for url '%s' breaks %u times\n", camera->breaks);
         }
     }
     return 0;

@@ -22,6 +22,7 @@ struct camera {
     bool recorder_working_last;
     pthread_t recorder_thread_this;
     pthread_t recorder_thread_last;
+    unsigned breaks;
 };
 
 struct camera *parse_argument_camera(char const *arg);
