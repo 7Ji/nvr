@@ -213,9 +213,9 @@ int cameras_work(struct camera *const camera_head) {
             }
         }
         if (camera->breaks > 100) {
-            pr_error("Camera for url '%s' breaks %u times\n", camera->breaks);
+            pr_error("Camera for url '%s' breaks %u times\n", camera->url, camera->breaks);
         } else if (camera->breaks > 10) {
-            pr_warn("Camera for url '%s' breaks %u times\n", camera->breaks);
+            pr_warn("Camera for url '%s' breaks %u times\n", camera->url, camera->breaks);
         }
     }
     return 0;
