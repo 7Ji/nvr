@@ -119,14 +119,14 @@ static int camera_push_this_to_last(struct camera *camera) {
     if (camera->recorder_working_this) {
         if (camera->recorder_working_last) {
             if (pthread_kill(camera->recorder_thread_last, SIGINT)) {
-                pr_error("Faile to send kill signal to last record thread for camera of url '%s'", camera->url);
+                pr_error("Faile to send kill signal to last record thread for camera of url '%s'\n", camera->url);
                 return 1;
             }
             int r;
             long ret;
             switch ((r = pthread_tryjoin_np(camera->recorder_thread_last, (void **)&ret))) {
             case EBUSY:
-                pr_error("Failed to kill pthread for last record thread for camera of url '%s' for good", camera->url);
+                pr_error("Failed to kill pthread for last record thread for camera of url '%s' for good\n", camera->url);
                 return 2;
             case 0:
                 if (ret) {
@@ -145,6 +145,7 @@ static int camera_push_this_to_last(struct camera *camera) {
         }
         camera->recorder_thread_last = camera->recorder_thread_this;
         camera->recorder_working_last = true;
+        camera->recorder_working_this = false;
     }
     return 0;
 }
@@ -153,7 +154,10 @@ static int camera_create_thread(struct camera *const camera) {
     if (camera->break_waiting) {
         if (--camera->break_wait_ticks) {
             return 0;
-        } /* if wait ticks is 0, is can enter the following logic */
+        } else {
+            /* if wait ticks is 0, it can enter the following logic */
+            camera->break_waiting = false;
+        }
     } else if (camera->breaks > 100) {
         if (camera->breaks > 10000) {
             camera->break_wait_ticks = 600;
@@ -236,7 +240,7 @@ int cameras_work(struct camera *const camera_head) {
         struct tm tms_next = tms_now;
         int minute = (tms_now.tm_min + 11) / 10 * 10;
         if (minute >= 60) {
-            tms_next.tm_min = minute - 60;
+            tms_next.tm_min = minute % 60;
             ++tms_next.tm_hour;
         } else {
             tms_next.tm_min = minute;
