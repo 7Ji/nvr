@@ -73,6 +73,7 @@ struct camera *parse_argument_camera(char const *const arg) {
     camera->recorder_working_this = false;
     camera->recorder_working_last = false;
     camera->breaks = 0;
+    camera->break_waiting = false;
     pr_debug("Camera defitnition: name: '%s', strftime: '%s', url: '%s'\n", camera->name, camera->strftime, camera->url);
     return camera;
 }
@@ -114,10 +115,122 @@ static void *camera_record_thread(void *arg) {
     return (void *)r;
 }
 
+static int camera_push_this_to_last(struct camera *camera) {
+    if (camera->recorder_working_this) {
+        if (camera->recorder_working_last) {
+            if (pthread_kill(camera->recorder_thread_last, SIGINT)) {
+                pr_error("Faile to send kill signal to last record thread for camera of url '%s'", camera->url);
+                return 1;
+            }
+            int r;
+            long ret;
+            switch ((r = pthread_tryjoin_np(camera->recorder_thread_last, (void **)&ret))) {
+            case EBUSY:
+                pr_error("Failed to kill pthread for last record thread for camera of url '%s' for good", camera->url);
+                return 2;
+            case 0:
+                if (ret) {
+                    pr_error("Thread for killed recorder of camera of url '%s' breaks with %ld\n", camera->url, ret);
+                    ++camera->breaks;
+                    // return 3;
+                } else {
+                    pr_warn("Last camera recorder for url '%s' safely ends\n", camera->url);
+                    camera->breaks = 0;
+                }
+                break;
+            default:
+                pr_error("Unexpected return from pthread_tryjoin_np: %d\n", r);
+                return -1;
+            }
+        }
+        camera->recorder_thread_last = camera->recorder_thread_this;
+        camera->recorder_working_last = true;
+    }
+    return 0;
+}
+
+static int camera_create_thread(struct camera *const camera) {
+    if (camera->break_waiting) {
+        if (--camera->break_wait_ticks) {
+            return 0;
+        } /* if wait ticks is 0, is can enter the following logic */
+    } else if (camera->breaks > 100) {
+        if (camera->breaks > 10000) {
+            camera->break_wait_ticks = 600;
+        } else if (camera->breaks > 1000)  {
+            camera->break_wait_ticks = 90;
+        } else {
+            camera->break_wait_ticks = 10;
+        }
+        camera->break_waiting = true;
+        return 0;
+    }
+    if (pthread_create(&camera->recorder_thread_this, NULL, camera_record_thread, (void *)camera)) {
+        pr_error("Failed to create thread to record camera for url '%s'\n", camera->url);
+        return 1;
+    }
+    camera->recorder_working_this = true;
+    return 0;
+}
+
+static int camera_make_sure_working(struct camera *const camera) {
+    if (camera->recorder_working_this) {
+        int r;
+        long ret;
+        switch ((r = pthread_tryjoin_np(camera->recorder_thread_this, (void **)&ret))) {
+        case EBUSY:
+            break;
+        case 0:
+            if (ret) {
+                pr_error("Camera recorder for url '%s' breaks with return value '%ld'\n", camera->url, ret);
+                ++camera->breaks;
+            } else {
+                pr_warn("Camera recorder for url '%s' safely ends\n", camera->url);
+                camera->breaks = 0;
+            }
+            camera->recorder_working_this = false;
+            break;
+        default:
+            pr_error("Unexpected return from pthread_tryjoin_np: %d\n", r);
+            return -1;
+        }
+    }
+    if (!camera->recorder_working_this) { /* It must be at least recording for 'this' */
+        if (camera_create_thread(camera)) {
+            pr_error("Failed to create thread for camera of url '%s'\n", camera->url);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int camera_check_last(struct camera *const camera) {
+    if (camera->recorder_working_last) {
+        int r;
+        long ret;
+        switch ((r = pthread_tryjoin_np(camera->recorder_thread_last, (void **)&ret))) {
+        case EBUSY:
+            break;
+        case 0:
+            if (ret) {
+                pr_error("Last camera recorder for url '%s' breaks with return value '%ld'\n", camera->url, ret);
+                ++camera->breaks;
+            } else {
+                pr_warn("Last camera recorder for url '%s' safely ends\n", camera->url);
+                camera->breaks = 0;
+            }
+            camera->recorder_working_last = false;
+            break;
+        default:
+            pr_error("Unexpected return from pthread_tryjoin_np: %d\n", r);
+            return -1;
+        }
+    }
+    return 0;
+}
+
 int cameras_work(struct camera *const camera_head) {
     time_t time_now = time(NULL);
-    long ret;
-    int r;
     if (time_now >= time_next) {
         localtime_r(&time_now, &tms_now);
         struct tm tms_next = tms_now;
@@ -131,91 +244,25 @@ int cameras_work(struct camera *const camera_head) {
         tms_next.tm_sec = 0;
         time_next = mktime(&tms_next);
         for (struct camera *camera = camera_head; camera; camera = camera->next_camera) {
-            if (camera->recorder_working_this) {
-                if (camera->recorder_working_last) {
-                    if (pthread_kill(camera->recorder_thread_last, SIGINT)) {
-                        pr_error("Faile to send kill signal to last record thread for camera of url '%s'", camera->url);
-                        return 1;
-                    }
-                    switch ((r = pthread_tryjoin_np(camera->recorder_thread_last, (void **)&ret))) {
-                    case EBUSY:
-                        pr_error("Failed to kill pthread for last record thread for camera of url '%s' for good", camera->url);
-                        return 2;
-                    case 0:
-                        if (ret) {
-                            pr_error("Thread for killed recorder of camera of url '%s' breaks with %ld\n", camera->url, ret);
-                            ++camera->breaks;
-                            // return 3;
-                        } else {
-                            pr_warn("Last camera recorder for url '%s' safely ends\n", camera->url);
-                            camera->breaks = 0;
-                        }
-                        break;
-                    default:
-                        pr_error("Unexpected return from pthread_tryjoin_np: %d\n", r);
-                        return -1;
-                    }
-                }
-                camera->recorder_thread_last = camera->recorder_thread_this;
-                camera->recorder_working_last = true;
+            if (camera_push_this_to_last(camera)) {
+                pr_error("Failed to push this to last for camera of url '%s'\n", camera->url);
+                return 1;
             }
-            if (pthread_create(&camera->recorder_thread_this, NULL, camera_record_thread, (void *)camera)) {
-                pr_error("Failed to create thread to record camera for url '%s'\n", camera->url);
-                return 3;
+            if (camera_create_thread(camera)) {
+                pr_error("Failed to create thread for camera of url '%s'\n", camera->url);
+                return 2;
             }
             camera->recorder_working_this = true;
         }
     }
     for (struct camera *camera = camera_head; camera; camera = camera->next_camera) {
-        if (camera->recorder_working_this) {
-            switch ((r = pthread_tryjoin_np(camera->recorder_thread_this, (void **)&ret))) {
-            case EBUSY:
-                break;
-            case 0:
-                if (ret) {
-                    pr_error("Camera recorder for url '%s' breaks with return value '%ld'\n", camera->url, ret);
-                    ++camera->breaks;
-                } else {
-                    pr_warn("Camera recorder for url '%s' safely ends\n", camera->url);
-                    camera->breaks = 0;
-                }
-                camera->recorder_working_this = false;
-                break;
-            default:
-                pr_error("Unexpected return from pthread_tryjoin_np: %d\n", r);
-                return -1;
-            }
+        if (camera_make_sure_working(camera)) {
+            pr_error("Failed to make sure camera for url '%s' is working\n", camera->url);
+            return 3;
         }
-        if (!camera->recorder_working_this) { /* It must be at least recording for 'this' */
-            if (pthread_create(&camera->recorder_thread_this, NULL, camera_record_thread, (void *)camera)) {
-                pr_error("Failed to create thread to record camera for url '%s'\n", camera->url);
-                return 5;
-            }
-            camera->recorder_working_this = true;
-        }
-        if (camera->recorder_working_last) {
-            switch ((r = pthread_tryjoin_np(camera->recorder_thread_last, (void **)&ret))) {
-            case EBUSY:
-                break;
-            case 0:
-                if (ret) {
-                    pr_error("Last camera recorder for url '%s' breaks with return value '%ld'\n", camera->url, ret);
-                    ++camera->breaks;
-                } else {
-                    pr_warn("Last camera recorder for url '%s' safely ends\n", camera->url);
-                    camera->breaks = 0;
-                }
-                camera->recorder_working_last = false;
-                break;
-            default:
-                pr_error("Unexpected return from pthread_tryjoin_np: %d\n", r);
-                return -1;
-            }
-        }
-        if (camera->breaks > 100) {
-            pr_error("Camera for url '%s' breaks %u times\n", camera->url, camera->breaks);
-        } else if (camera->breaks > 10) {
-            pr_warn("Camera for url '%s' breaks %u times\n", camera->url, camera->breaks);
+        if (camera_check_last(camera)) {
+            pr_error("Failed to check last camera for url '%s'\n", camera->url);
+            return 3;
         }
     }
     return 0;

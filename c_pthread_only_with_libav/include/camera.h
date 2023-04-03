@@ -23,6 +23,8 @@ struct camera {
     pthread_t recorder_thread_this;
     pthread_t recorder_thread_last;
     unsigned breaks;
+    bool break_waiting;
+    unsigned break_wait_ticks;
 };
 
 struct camera *parse_argument_camera(char const *arg);
