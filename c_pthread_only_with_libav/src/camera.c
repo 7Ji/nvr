@@ -204,7 +204,6 @@ static int camera_make_sure_working(struct camera *const camera) {
             pr_error("Failed to create thread for camera of url '%s'\n", camera->url);
             return 1;
         }
-        camera->recorder_working_this = true;
     }
     return 0;
 }
