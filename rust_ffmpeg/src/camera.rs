@@ -91,7 +91,6 @@ pub(crate) fn record_all(cameras: Cameras) {
                 if let Err(e) = camera_with_thread.handle.join()
                     .expect("Failed to join") {
                     println!("Something wrong on camera {}: {:?}, but we ignore that", camera.name, e);
-                    return;
                 }
                 cameras_with_threads.push(CameraWithHandle{
                     camera,

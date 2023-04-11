@@ -89,6 +89,7 @@ impl Output {
     }
     fn write_packet(&mut self, packet: &Packet) -> Result<(), Error> {
         if let Err(e) = packet.write_interleaved(&mut self.context) {
+            println!("Error when writing packet: {:?}", e);
             if let ffmpeg::Error::Other {errno} = e {
                 if errno != AVERROR_BAD_REQUEST {
                     return Err(Error::BrokenMux)
@@ -113,7 +114,7 @@ fn get_time(offset: &time::UtcOffset) -> time::OffsetDateTime {
 fn get_next_time(time_now: &time::OffsetDateTime) -> time::OffsetDateTime {
     let minute = (time_now.minute() + 11) / 10 * 10;
     let mut time_next = time_now.clone();
-    if minute > 60 {
+    if minute >= 60 {
         time_next = time_next.replace_minute(0).expect("Failed to replace minute");
         time_next += time::Duration::HOUR;
     } else {
