@@ -66,6 +66,13 @@ struct Output {
 
 impl Output {
     fn new(name: String, input: &Input) -> Output {
+        match crate::storage::ensure_parent_folder(&name) {
+            Ok(_) => (),
+            Err(e) => {
+                println!("Failed to ensure parent folder for {} exists with error {}", name, e);
+                panic!();
+            }
+        }
         let none_codec = encoder::find(codec::Id::None);
         let mut output = Output {
             context: format::output(&name).expect("Failed to open file"),
