@@ -87,15 +87,14 @@ pub(crate) fn record_all(cameras: Cameras) {
         while id < cameras_with_threads.len() {
             if cameras_with_threads.get(id).expect("Failed to get camera with thread").handle.is_finished() {
                 let camera_with_thread = cameras_with_threads.swap_remove(id);
-                let camera = camera_with_thread.camera;
-                let camera_cloned = Arc::clone(camera);
+                let camera_cloned = Arc::clone(&camera_with_thread.camera);
                 let metadata_cloned = Arc::clone(&cameras.metadata);
                 if let Err(e) = camera_with_thread.handle.join()
                     .expect("Failed to join") {
-                    println!("Something wrong on camera {}: {:?}, but we ignore that", camera.name, e);
+                    println!("Something wrong on camera {}: {:?}, but we ignore that", camera_with_thread.camera.name, e);
                 }
                 cameras_with_threads.push(CameraWithHandle{
-                    camera,
+                    camera: camera_with_thread.camera,
                     handle: std::thread::spawn(move || 
                         ffmpeg::mux_segmented(
                             &camera_cloned, &metadata_cloned
