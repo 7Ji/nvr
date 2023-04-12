@@ -152,10 +152,8 @@ fn get_next_time(time_now: &time::OffsetDateTime) -> time::OffsetDateTime {
     }
 }
 
-const EXTENSION: &str = ".mkv";
-
 fn get_name(time: &time::OffsetDateTime, camera: &crate::camera::Camera, cameras_meta: &crate::camera::CamerasMetadata) -> String {
-    format!("{}/{}_{}{}", cameras_meta.folder, time.format(&cameras_meta.time_formatter).expect("Failed to format time"), camera.name, EXTENSION)
+    format!("{}/{}_{}{}", cameras_meta.folder, time.format(&cameras_meta.time_formatter).expect("Failed to format time"), camera.name, cameras_meta.suffix)
 }
 
 pub(crate) fn mux_segmented(camera: &crate::camera::Camera, cameras_meta: &crate::camera::CamerasMetadata) -> Result<(), Error>{

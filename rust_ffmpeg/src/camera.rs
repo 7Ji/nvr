@@ -13,22 +13,11 @@ pub(crate) struct Camera {
     pub url: String,
 }
 
-impl Clone for Camera {
-    fn clone(&self) -> Self {
-        Self { name: self.name.clone(), url: self.url.clone() }
-    }
-}
-
 pub(crate) struct CamerasMetadata {
     pub offset: time::UtcOffset,
     pub time_formatter: OwnedFormatItem,
     pub folder: String,
-}
-
-impl Clone for CamerasMetadata {
-    fn clone(&self) -> Self {
-        Self { offset: self.offset.clone(), time_formatter: self.time_formatter.clone(), folder: self.folder.clone() }
-    }
+    pub suffix: String,
 }
 
 pub(crate) struct Cameras {
@@ -56,7 +45,8 @@ impl From<&config::Config> for Cameras {
                 offset: time::UtcOffset::current_local_offset().expect("Failed to get UTC offset"),
                 time_formatter: time::format_description::parse_owned::<2>(&config.naming)
                     .expect("Failed to parse formatter"),
-                folder
+                folder,
+                suffix: config.suffix.clone(),
             }),
         }
     }

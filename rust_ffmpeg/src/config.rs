@@ -30,6 +30,7 @@ pub struct Config {
     pub storages: Vec<Storage>,
     pub cameras: Vec<Camera>,
     pub naming: String,
+    pub suffix: String,
 }
 
 pub fn read() -> Config {
