@@ -18,6 +18,8 @@ pub(crate) struct CamerasMetadata {
     pub time_formatter: OwnedFormatItem,
     pub folder: String,
     pub suffix: String,
+    pub segment: u32,
+    pub stop_delay: time::Duration,
 }
 
 pub(crate) struct Cameras {
@@ -41,60 +43,71 @@ impl From<&config::Config> for Cameras {
                     name: camera.name.clone(),
                     url: camera.url.clone(),
                 })).collect(),
-            metadata: Arc::new(CamerasMetadata { 
-                offset: time::UtcOffset::current_local_offset().expect("Failed to get UTC offset"),
-                time_formatter: time::format_description::parse_owned::<2>(&config.naming)
-                    .expect("Failed to parse formatter"),
-                folder,
-                suffix: config.suffix.clone(),
-            }),
+            metadata: {
+                let segment = config.time.segment;
+                let stop_delay = config.time.stop_delay;
+                println!("Segment length {}(seconds), stop delay {}(seconds)", segment, stop_delay);
+                if segment > 3600 {
+                    panic!("Segment too long, it could only be as long as 3600");
+                }
+                if segment <= 5 {
+                    panic!("Segment too long, it could not be shorter or equal to 5 seconds");
+                }
+                if stop_delay >= segment {
+                    panic!("Stop delay too long, it could only be less than segment");
+                }
+                if 3600 % segment > 0 {
+                    panic!("Segment could not devide 3600")
+                }
+                Arc::new(CamerasMetadata { 
+                    offset: time::UtcOffset::current_local_offset().expect("Failed to get UTC offset"),
+                    time_formatter: time::format_description::parse_owned::<2>(&config.time.naming)
+                        .expect("Failed to parse formatter"),
+                    folder,
+                    suffix: config.suffix.clone(),
+                    segment,
+                    stop_delay: time::Duration::seconds(stop_delay as _),
+                })
+            },
         }
     }
 }
 
-struct CameraWithHandle<'a> {
+pub(crate) struct CameraWithHandle<'a> {
     camera: &'a Arc<Camera>,
     handle: std::thread::JoinHandle<Result<(), Error>>,
 }
 
-pub(crate) fn record_all(cameras: Cameras) {
-    let mut cameras_with_threads = vec![];
-    for camera in cameras.cameras.iter() {
+pub(crate) fn record_init(cameras: &Cameras) -> Vec<CameraWithHandle> {
+    cameras.cameras.iter().map(|camera| {
         let camera_cloned = Arc::clone(camera);
         let metadata_cloned = Arc::clone(&cameras.metadata);
-        cameras_with_threads.push(CameraWithHandle{
+        CameraWithHandle{
             camera,
             handle: std::thread::spawn(move || 
                 ffmpeg::mux_segmented(
                     &camera_cloned, &metadata_cloned
                 )
             )
-        })
-    }
-    const SECOND: std::time::Duration = std::time::Duration::from_secs(1);
-    loop {
-        let mut id = 0;
-        while id < cameras_with_threads.len() {
-            if cameras_with_threads.get(id).expect("Failed to get camera with thread").handle.is_finished() {
-                let camera_with_thread = cameras_with_threads.swap_remove(id);
-                let camera_cloned = Arc::clone(&camera_with_thread.camera);
-                let metadata_cloned = Arc::clone(&cameras.metadata);
-                if let Err(e) = camera_with_thread.handle.join()
-                    .expect("Failed to join") {
-                    println!("Something wrong on camera {}: {:?}, but we ignore that", camera_with_thread.camera.name, e);
-                }
-                cameras_with_threads.push(CameraWithHandle{
-                    camera: camera_with_thread.camera,
-                    handle: std::thread::spawn(move || 
-                        ffmpeg::mux_segmented(
-                            &camera_cloned, &metadata_cloned
-                        )
-                    )
-                });
-            } else {
-                id += 1;
+        }
+    }).collect()
+}
+
+
+pub(crate) fn record_ensure_working(cameras: &Cameras, cameras_with_handles: &mut Vec<CameraWithHandle>) {
+    for camera_with_handle in cameras_with_handles.iter_mut() {
+        if camera_with_handle.handle.is_finished() {
+            let camera_cloned = Arc::clone(&camera_with_handle.camera);
+            let metadata_cloned = Arc::clone(&cameras.metadata);
+            let new_handle = std::thread::spawn(move ||
+                ffmpeg::mux_segmented(
+                    &camera_cloned, &metadata_cloned
+                )
+            );
+            let old_handle = std::mem::replace(&mut camera_with_handle.handle, new_handle);
+            if let Err(e) = old_handle.join().expect("Failed to join camera thread") {
+                println!("Something wrong on camera {}: {:?}, but we ignore that", camera_with_handle.camera.name, e);
             }
         }
-        std::thread::sleep(SECOND);
     }
 }

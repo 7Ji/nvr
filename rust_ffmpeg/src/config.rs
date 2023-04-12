@@ -26,10 +26,17 @@ pub struct Camera {
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
+pub struct Time {
+    pub naming: String,
+    pub segment: u32,
+    pub stop_delay: u32,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct Config {
     pub storages: Vec<Storage>,
     pub cameras: Vec<Camera>,
-    pub naming: String,
+    pub time: Time,
     pub suffix: String,
 }
 

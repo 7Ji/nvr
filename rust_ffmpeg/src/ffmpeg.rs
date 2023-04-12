@@ -138,18 +138,11 @@ fn get_time(offset: &time::UtcOffset) -> time::OffsetDateTime {
     time::OffsetDateTime::now_utc().to_offset(*offset)
 }
 
-fn get_next_time(time_now: &time::OffsetDateTime) -> time::OffsetDateTime {
-    let minute = (time_now.minute() + 11) / 10 * 10;
-    let time_next = time_now.clone()
-        .replace_second(0)
-        .expect("Failed to replace second to 0")
-        .replace_microsecond(0)
-        .expect("Failed to replace microsecond to 0");
-    if minute >= 60 {
-        time_next.replace_minute(0).expect("Failed to replace minute") + time::Duration::HOUR
-    } else {
-        time_next.replace_minute(minute).expect("Failed to replace minute")
-    }
+fn get_next_time(time_now: &time::OffsetDateTime, segment: u32) -> time::OffsetDateTime {
+    let minute_second = time_now.minute() as u32 * 60 + time_now.second() as u32;
+    let upper_bound = (minute_second / segment + 1) * segment;
+
+    time_now.clone() + time::Duration::seconds((upper_bound - minute_second) as _)
 }
 
 fn get_name(time: &time::OffsetDateTime, camera: &crate::camera::Camera, cameras_meta: &crate::camera::CamerasMetadata) -> String {
@@ -157,16 +150,14 @@ fn get_name(time: &time::OffsetDateTime, camera: &crate::camera::Camera, cameras
 }
 
 pub(crate) fn mux_segmented(camera: &crate::camera::Camera, cameras_meta: &crate::camera::CamerasMetadata) -> Result<(), Error>{
-    println!("Muxing from {}", camera.url);
-    const TIME_STOP_LAG: time::Duration = time::Duration::seconds(5);
     let (input, mut input_context) = match Input::new(&camera.url) {
         Ok((input, input_context)) => (input, input_context),
         Err(e) => return Err(e),
     };
     let mut time_now = get_time(&cameras_meta.offset);
-    let mut time_next = get_next_time(&time_now);
-    let mut time_stop = time_next + TIME_STOP_LAG;
-    println!("Camera {} started, now: {}, next: {}, stop: {}", camera.name, time_now, time_next, time_stop);
+    let mut time_next = get_next_time(&time_now, cameras_meta.segment);
+    let mut time_stop = time_next + cameras_meta.stop_delay;
+    println!("Camera {} started, muxing from {}, segment length: {}, stop delay: {}, now: {}, next: {}, stop: {}", camera.name, camera.url, cameras_meta.segment, cameras_meta.stop_delay, time_now, time_next, time_stop);
     let mut output_this = Output::new(get_name(&time_now, camera, cameras_meta), &input, 0);
     let mut output_last: Option<Output> = None;
     for (stream, mut packet) in input_context.packets() {
@@ -177,14 +168,14 @@ pub(crate) fn mux_segmented(camera: &crate::camera::Camera, cameras_meta: &crate
             }
             output_last = Some(output_this);
             output_this = Output::new(get_name(&time_now, camera, cameras_meta), &input, packet.pts().expect("Failed to get pts to set offset"));
-            time_next = get_next_time(&time_now);
+            time_next = get_next_time(&time_now, cameras_meta.segment);
         }
         if time_now >= time_stop {
             if let Some(output) = output_last {
                 output.close();
                 output_last = None;
             }
-            time_stop = time_next + TIME_STOP_LAG;
+            time_stop = time_next + cameras_meta.stop_delay;
         }
         match input.streams.get(stream.index()).expect("Failed to get input stream info") {
             InputStream::Invalid => continue,
