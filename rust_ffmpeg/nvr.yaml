@@ -32,7 +32,7 @@ storages:
 # Files will be named [stem generated with naming]_[camera name].mkv, stored in first storage
 #   e.g. 0-hot/20230401/20230401_192000_road.mkv
 naming: "[year][month][day]/[year][month][day]_[hour][minute][second]"
-
+suffix: .mkv
 cameras:
   - name: road
     url: rtsp://cm2.7ji:8554/road
