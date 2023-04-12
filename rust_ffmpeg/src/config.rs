@@ -2,8 +2,8 @@ use serde::{Serialize, Deserialize};
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct Threshold {
-    pub free: String,
-    pub used: String,
+    pub free: Option<String>,
+    pub used: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
