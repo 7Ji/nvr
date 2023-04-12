@@ -62,10 +62,11 @@ struct Output {
     name: String,
     context: format::context::Output,
     count_streams: u32,
+    pts_offset: i64,
 }
 
 impl Output {
-    fn new(name: String, input: &Input) -> Output {
+    fn new(name: String, input: &Input, pts_offset: i64) -> Output {
         match crate::storage::ensure_parent_folder(&name) {
             Ok(_) => (),
             Err(e) => {
@@ -78,6 +79,7 @@ impl Output {
             context: format::output(&name).expect("Failed to open file"),
             name,
             count_streams: 0,
+            pts_offset,
         };
         for in_stream in input.streams.iter() {
             if let InputStream::Valid { mapping: _, time_base: _, parameter } = in_stream {
@@ -107,6 +109,24 @@ impl Output {
         }
         Ok(())
     }
+    fn adjust_packet_and_write(&mut self, packet: &mut Packet, mapping: usize, time_base: &Rational) -> Result<(), Error> {
+        let stream = self.context.stream(mapping).expect("Failed to get stream from output");
+        packet.rescale_ts(*time_base, stream.time_base());
+        packet.set_position(-1);
+        packet.set_stream(mapping);
+        match packet.pts() {
+            Some(pts) => {
+                let pts = pts - self.pts_offset;
+                packet.set_pts(Some(pts));
+                packet.set_dts(Some(pts));
+            },
+            None => ()
+        }
+        if let Err(e) = self.write_packet(packet) {
+            return Err(e);
+        }
+        Ok(())
+    }
     fn close(mut self) {
         self.context.write_trailer().expect("Failed to close output");
         println!("Closed output {}", self.name);
@@ -115,19 +135,21 @@ impl Output {
 
 
 fn get_time(offset: &time::UtcOffset) -> time::OffsetDateTime {
-    time::OffsetDateTime::now_utc().replace_offset(*offset)
+    time::OffsetDateTime::now_utc().to_offset(*offset)
 }
 
 fn get_next_time(time_now: &time::OffsetDateTime) -> time::OffsetDateTime {
     let minute = (time_now.minute() + 11) / 10 * 10;
-    let mut time_next = time_now.clone();
+    let time_next = time_now.clone()
+        .replace_second(0)
+        .expect("Failed to replace second to 0")
+        .replace_microsecond(0)
+        .expect("Failed to replace microsecond to 0");
     if minute >= 60 {
-        time_next = time_next.replace_minute(0).expect("Failed to replace minute");
-        time_next += time::Duration::HOUR;
+        time_next.replace_minute(0).expect("Failed to replace minute") + time::Duration::HOUR
     } else {
-        time_next = time_next.replace_minute(minute).expect("Failed to replace minute");
+        time_next.replace_minute(minute).expect("Failed to replace minute")
     }
-    time_next.replace_second(0).expect("Failed to replace second")
 }
 
 const EXTENSION: &str = ".mkv";
@@ -147,7 +169,7 @@ pub(crate) fn mux_segmented(camera: &crate::camera::Camera, cameras_meta: &crate
     let mut time_next = get_next_time(&time_now);
     let mut time_stop = time_next + TIME_STOP_LAG;
     println!("Camera {} started, now: {}, next: {}, stop: {}", camera.name, time_now, time_next, time_stop);
-    let mut output_this = Output::new(get_name(&time_now, camera, cameras_meta), &input);
+    let mut output_this = Output::new(get_name(&time_now, camera, cameras_meta), &input, 0);
     let mut output_last: Option<Output> = None;
     for (stream, mut packet) in input_context.packets() {
         time_now = get_time(&cameras_meta.offset);
@@ -156,7 +178,7 @@ pub(crate) fn mux_segmented(camera: &crate::camera::Camera, cameras_meta: &crate
                 output.close();
             }
             output_last = Some(output_this);
-            output_this = Output::new(get_name(&time_now, camera, cameras_meta), &input);
+            output_this = Output::new(get_name(&time_now, camera, cameras_meta), &input, packet.pts().expect("Failed to get pts to set offset"));
             time_next = get_next_time(&time_now);
         }
         if time_now >= time_stop {
@@ -169,17 +191,14 @@ pub(crate) fn mux_segmented(camera: &crate::camera::Camera, cameras_meta: &crate
         match input.streams.get(stream.index()).expect("Failed to get input stream info") {
             InputStream::Invalid => continue,
             InputStream::Valid { mapping, time_base, parameter: _ } => {
-                let stream = output_this.context.stream(*mapping as _).expect("Failed to get stream from output");
-                packet.rescale_ts(*time_base, stream.time_base());
-                packet.set_position(-1);
-                packet.set_stream(*mapping as _);
-                if let Err(e) = output_this.write_packet(&packet) {
-                    return Err(e);
-                }
                 if let Some(output_last) = &mut output_last {
-                    if let Err(e) = output_last.write_packet(&packet) {
+                    let mut packet = packet.clone();
+                    if let Err(e) = output_last.adjust_packet_and_write(&mut packet, *mapping as _, time_base) {
                         return Err(e);
                     }
+                }
+                if let Err(e) = output_this.adjust_packet_and_write(&mut packet, *mapping as _, time_base) {
+                    return Err(e);
                 }
             }
         }
