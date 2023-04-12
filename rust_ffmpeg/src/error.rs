@@ -1,5 +1,5 @@
 #[derive(Debug)]
-pub enum Error {
+pub(crate) enum Error {
     FailedToConnect,
     BrokenMux,
 }

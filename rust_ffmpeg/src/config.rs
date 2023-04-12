@@ -1,46 +1,46 @@
 use serde::{Serialize, Deserialize};
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
-pub struct Threshold {
-    pub free: Option<String>,
-    pub used: Option<String>,
+pub(crate) struct Threshold {
+    pub(crate) free: Option<String>,
+    pub(crate) used: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
-pub struct Thresholds {
-    pub begin: Threshold,
-    pub end: Threshold,
+pub(crate) struct Thresholds {
+    pub(crate) begin: Threshold,
+    pub(crate) end: Threshold,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
-pub struct Storage {
-    pub name: String,
-    pub thresholds: Thresholds,
-    pub flags: Vec<String>,
+pub(crate) struct Storage {
+    pub(crate) name: String,
+    pub(crate) thresholds: Thresholds,
+    pub(crate) flags: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
-pub struct Camera {
-    pub name: String,
-    pub url: String,
+pub(crate) struct Camera {
+    pub(crate) name: String,
+    pub(crate) url: String,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
-pub struct Time {
-    pub naming: String,
-    pub segment: u32,
-    pub stop_delay: u32,
+pub(crate) struct Time {
+    pub(crate) naming: String,
+    pub(crate) segment: u32,
+    pub(crate) stop_delay: u32,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
-pub struct Config {
-    pub storages: Vec<Storage>,
-    pub cameras: Vec<Camera>,
-    pub time: Time,
-    pub suffix: String,
+pub(crate) struct Config {
+    pub(crate) storages: Vec<Storage>,
+    pub(crate) cameras: Vec<Camera>,
+    pub(crate) time: Time,
+    pub(crate) suffix: String,
 }
 
-pub fn read() -> Config {
+pub(crate) fn read() -> Config {
     let config: Config = serde_yaml::from_reader(
         std::fs::File::open("nvr.yaml")
             .expect("Failed to open config file, make sure it's stored as nvr.yaml"))

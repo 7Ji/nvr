@@ -4,7 +4,7 @@ use nix::{
     errno,
 };
 
-pub fn ensure_parent_folder(path: &str) -> Result<(), errno::Errno> {
+pub(crate) fn ensure_parent_folder(path: &str) -> Result<(), errno::Errno> {
     let id = path.rfind('/').expect("Failed to find seperator");
     let parent = &path[0..id];
     if let Err(e) = mkdir(parent, stat::Mode::S_IRWXU) {

@@ -5,7 +5,7 @@ use ffmpeg::{format, log, media, Rational, encoder, codec, util, Packet};
 
 const AVERROR_BAD_REQUEST: i32 = 22;
 
-pub fn prepare(){
+pub(crate) fn prepare(){
     ffmpeg::init().expect("Failed to init ffmpeg");
     log::set_level(log::Level::Warning);
 }
