@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::{
     error::Error,
     config,
@@ -30,8 +32,8 @@ impl Clone for CamerasMetadata {
 }
 
 pub(crate) struct Cameras {
-    cameras: Vec<Camera>,
-    metadata: CamerasMetadata,
+    cameras: Vec<Arc<Camera>>,
+    metadata: Arc<CamerasMetadata>,
 }
 
 impl From<&config::Config> for Cameras {
@@ -46,30 +48,30 @@ impl From<&config::Config> for Cameras {
             cameras: config
                 .cameras
                 .iter()
-                .map(|camera| Camera {
+                .map(|camera| Arc::new(Camera {
                     name: camera.name.clone(),
                     url: camera.url.clone(),
-                }).collect(),
-            metadata: CamerasMetadata { 
+                })).collect(),
+            metadata: Arc::new(CamerasMetadata { 
                 offset: time::UtcOffset::current_local_offset().expect("Failed to get UTC offset"),
                 time_formatter: time::format_description::parse_owned::<2>(&config.naming)
                     .expect("Failed to parse formatter"),
                 folder
-            },
+            }),
         }
     }
 }
 
 struct CameraWithHandle<'a> {
-    camera: &'a Camera,
+    camera: &'a Arc<Camera>,
     handle: std::thread::JoinHandle<Result<(), Error>>,
 }
 
 pub(crate) fn record_all(cameras: Cameras) {
     let mut cameras_with_threads = vec![];
     for camera in cameras.cameras.iter() {
-        let camera_cloned = camera.clone();
-        let metadata_cloned = cameras.metadata.clone();
+        let camera_cloned = Arc::clone(camera);
+        let metadata_cloned = Arc::clone(&cameras.metadata);
         cameras_with_threads.push(CameraWithHandle{
             camera,
             handle: std::thread::spawn(move || 
@@ -83,11 +85,11 @@ pub(crate) fn record_all(cameras: Cameras) {
     loop {
         let mut id = 0;
         while id < cameras_with_threads.len() {
-            if cameras_with_threads.get(id).unwrap().handle.is_finished() {
+            if cameras_with_threads.get(id).expect("Failed to get camera with thread").handle.is_finished() {
                 let camera_with_thread = cameras_with_threads.swap_remove(id);
                 let camera = camera_with_thread.camera;
-                let camera_cloned = camera.clone();
-                let metadata_cloned = cameras.metadata.clone();
+                let camera_cloned = Arc::clone(camera);
+                let metadata_cloned = Arc::clone(&cameras.metadata);
                 if let Err(e) = camera_with_thread.handle.join()
                     .expect("Failed to join") {
                     println!("Something wrong on camera {}: {:?}, but we ignore that", camera.name, e);

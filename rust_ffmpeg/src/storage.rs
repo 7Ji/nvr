@@ -24,3 +24,4 @@ pub fn ensure_parent_folder(path: &str) -> Result<(), errno::Errno> {
     }
     Ok(())
 }
+
