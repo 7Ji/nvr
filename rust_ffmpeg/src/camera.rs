@@ -106,7 +106,7 @@ pub(crate) fn record_ensure_working(cameras: &Cameras, cameras_with_handles: &mu
             );
             let old_handle = std::mem::replace(&mut camera_with_handle.handle, new_handle);
             if let Err(e) = old_handle.join().expect("Failed to join camera thread") {
-                println!("Something wrong on camera {}: {:?}, but we ignore that", camera_with_handle.camera.name, e);
+                println!("Something wrong on camera {}: {:?}, restarted it", camera_with_handle.camera.name, e);
             }
         }
     }

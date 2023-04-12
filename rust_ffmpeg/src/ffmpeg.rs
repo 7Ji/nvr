@@ -98,12 +98,13 @@ impl Output {
     }
     fn write_packet(&mut self, packet: &Packet) -> Result<(), Error> {
         if let Err(e) = packet.write_interleaved(&mut self.context) {
-            println!("Error when writing packet: {:?}", e);
             if let ffmpeg::Error::Other {errno} = e {
                 if errno != AVERROR_BAD_REQUEST {
+                    println!("Error when writing packet: {:?}", e);
                     return Err(Error::BrokenMux)
                 }
             } else {
+                println!("Error when writing packet: {:?}", e);
                 return Err(Error::BrokenMux)
             }
         }
@@ -157,7 +158,7 @@ pub(crate) fn mux_segmented(camera: &crate::camera::Camera, cameras_meta: &crate
     let mut time_now = get_time(&cameras_meta.offset);
     let mut time_next = get_next_time(&time_now, cameras_meta.segment);
     let mut time_stop = time_next + cameras_meta.stop_delay;
-    println!("Camera {} started, muxing from {}, segment length: {}, stop delay: {}, now: {}, next: {}, stop: {}", camera.name, camera.url, cameras_meta.segment, cameras_meta.stop_delay, time_now, time_next, time_stop);
+    println!("Muxing {} into segments:\n - from url: {}\n - segment length: {}s\n - stop delay: {}\n - now: {}\n - next: {}\n - stop: {}", camera.name, camera.url, cameras_meta.segment, cameras_meta.stop_delay, time_now, time_next, time_stop);
     let mut output_this = Output::new(get_name(&time_now, camera, cameras_meta), &input, 0);
     let mut output_last: Option<Output> = None;
     for (stream, mut packet) in input_context.packets() {
