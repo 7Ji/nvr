@@ -3,36 +3,28 @@
 #   [name]:
 #     thresholds:
 #       begin:
-
-
 storages:
   - name: 0-hot
     thresholds:
       begin: 
         free: 500M
-        used: 
+        # used: 
       end: 
-        free: 90%
-        used: 
+        free: 1G
+        # used: 
     flags:
-      # - half_duplex
+      - half_duplex
   - name: 1-warmer
     thresholds:
       begin:
         free: 1G
-        used: 
+        # used: 
       end:
         free: 10G
-        used: 
+        # used: 
     flags:
       # - half_duplex
 
-# The value in naming is used to generate the output file name, 
-#   refer to  https://time-rs.github.io/book/api/format-description.html for format
-# Files will be named [stem generated with naming]_[camera name].mkv, stored in first storage
-#   e.g. 0-hot/20230401/20230401_192000_road.mkv
-naming: "[year][month][day]/[year][month][day]_[hour][minute][second]"
-suffix: .mkv
 cameras:
   - name: road
     url: rtsp://cm2.7ji:8554/road
@@ -40,3 +32,14 @@ cameras:
     url: rtsp://cm2.7ji:8554/garden
   - name: rooftop
     url: rtsp://cm2.7ji:8554/rooftop
+
+time:
+  # The value in naming is used to generate the output file name, 
+  #   refer to  https://time-rs.github.io/book/api/format-description.html for format
+  # Files will be named [stem generated with naming]_[camera name].mkv, stored in first storage
+  #   e.g. 0-hot/20230401/20230401_192000_road.mkv
+  naming: "[year][month][day]/[year][month][day]_[hour][minute][second]"
+  segment: 600
+  stop_delay: 5
+
+suffix: .mkv
