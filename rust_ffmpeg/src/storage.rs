@@ -3,7 +3,7 @@ use crate::{
     error::Error,
 };
 
-use std::{fs::{rename, copy, remove_file, DirEntry, remove_dir_all, remove_dir}, path::{Path, PathBuf}};
+use std::{fs::{rename, copy, remove_file, DirEntry, remove_dir}, path::{Path, PathBuf}};
 
 use nix::{
     unistd::mkdir,
