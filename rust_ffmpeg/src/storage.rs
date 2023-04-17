@@ -3,7 +3,7 @@ use crate::{
     error::Error,
 };
 
-use std::{fs::{rename, copy, remove_file, DirEntry}, path::{Path, PathBuf}};
+use std::{fs::{rename, copy, remove_file, DirEntry, remove_dir_all, remove_dir}, path::{Path, PathBuf}};
 
 use nix::{
     unistd::mkdir,
@@ -164,8 +164,10 @@ fn move_file(source: &Path, destination: &Path) -> Result<(), Error> {
 fn find_oldest_file_in_folder(folder: &Path) -> Option<DirEntry> {
     let mut oldest: Option<DirEntry> = None;
     if let Ok(rd) = std::fs::read_dir(folder) {
+        let mut entries_count = 0;
         for entry in rd {
             if let Ok(entry) = entry {
+                entries_count += 1;
                 if let Ok(file_type) = entry.file_type() {
                     if let Some(entry) = {
                         if file_type.is_dir() {
@@ -200,6 +202,12 @@ fn find_oldest_file_in_folder(folder: &Path) -> Option<DirEntry> {
 
                     }
                 }
+            }
+        }
+        if entries_count == 0 {
+            match remove_dir(folder) {
+                Ok(_) => println!("Removed an empty folder"),
+                Err(_) => println!("Failed to remove an empty folder"),
             }
         }
     }
