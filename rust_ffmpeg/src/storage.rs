@@ -133,9 +133,18 @@ pub(crate) fn ensure_parent_folder(path: &str) -> Result<(), errno::Errno> {
     Ok(())
 }
 
-pub(crate) fn move_file(source: &Path, destination: &Path) -> Result<(), Error> {
-    if let Err(e) = rename(source, destination) {
-        match e.raw_os_error() {
+fn move_file(source: &Path, destination: &Path) -> Result<(), Error> {
+    match destination.to_str() {
+        Some(destination) => {
+            match ensure_parent_folder(destination) {
+                Ok(_) => (),
+                Err(_) => return Err(Error::FailedIO),
+            }
+        },
+        None => return Err(Error::FailedIO),
+    };
+    match rename(source, destination) {
+        Err(e) => match e.raw_os_error() {
             Some(errno) => {
                 if errno == errno::Errno::EXDEV as i32 {
                     if let Ok(_) = copy(source, destination) {
@@ -147,8 +156,7 @@ pub(crate) fn move_file(source: &Path, destination: &Path) -> Result<(), Error> 
             }
             None => (),
         }
-    } else {
-        return Ok(());
+        Ok(_) => return Ok(()),
     }
     Err(Error::FailedIO)
 }
@@ -211,7 +219,6 @@ fn clean_folder(folder: &str, target: Option<&str>) -> Result<(), Error>{
                 if let Err(_) = move_file(&path, &target) {
                     return Err(Error::FailedIO);
                 }
-
             } else {
                 return Err(Error::FailedIO);
             }
