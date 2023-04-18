@@ -353,7 +353,7 @@ impl Storage {
 
     pub(crate) fn ensure_space(storages: &mut Vec<Self>) {
         let mut next_storage = None;
-        for storage in storages.iter_mut() {
+        for storage in storages.iter_mut().rev() {
             if let Some(cleaner) = &storage.cleaner {
                 if cleaner.is_finished() {
                     let cleaner = std::mem::replace(&mut storage.cleaner, None);
