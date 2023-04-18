@@ -385,6 +385,8 @@ impl Storage {
                             },
                         };
                     }
+                } else {
+                    storage.clean_ongoing = false;
                 }
             }
             next_storage = Some(storage);
