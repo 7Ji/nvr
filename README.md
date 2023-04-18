@@ -5,11 +5,11 @@
 make
 ```
 
-## c_pthread_only_with_libav
+## c_pthread_only_with_libffmpeg
  - Written in C
  - Uses pthreads for multi-threading
    - Specially, even if there's only one source, it will still be multi-threading, to cover the potential loss between two sequences (default being 3 seconds overlapping)
- - Directly linked with libav and use libav functions so very lightweight
+ - Directly linked with libffmpeg and use libffmpeg functions so very lightweight
 ### Run
 ```
 ./nvr --storage [storage definition] (--storage [storage definition] (--storage [storage definition] (...)))
